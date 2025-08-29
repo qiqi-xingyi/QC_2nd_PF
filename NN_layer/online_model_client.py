@@ -2,7 +2,7 @@
 # @time:8/28/25 23:38
 # @Author : Yuqi Zhang
 # @Email : yzhan135@kent.edu
-# @File:NetSurfP3.py
+# @File:online_model_client.py
 
 # NN_layer/online_model_client.py
 from __future__ import annotations
