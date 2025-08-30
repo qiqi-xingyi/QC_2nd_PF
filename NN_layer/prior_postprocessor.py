@@ -20,7 +20,6 @@ import pandas as pd
 # If you placed these in another module, adjust imports accordingly:
 from NN_layer.online_model_client import RawArtifact, RawArtifactIndex
 
-
 # ---------------------------
 # Unified Prior data object
 # ---------------------------
