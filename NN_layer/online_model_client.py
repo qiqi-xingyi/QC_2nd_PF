@@ -6,6 +6,7 @@
 
 # NN_layer/online_model_client.py
 
+
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 from pathlib import Path
