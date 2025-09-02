@@ -1,16 +1,41 @@
-# This is a sample Python script.
+# --*-- conding:utf-8 --*--
+# @time:9/1/25 20:57
+# @Author : Yuqi Zhang
+# @Email : yzhan135@kent.edu
+# @File:main.py
 
-# Press ⌃R to execute it or replace it with your code.
-# Press Double ⇧ to search everywhere for classes, files, tool windows, actions, and settings.
+from pathlib import Path
+from NN_layer import SequenceReader, OnlineModelClient, PriorPostprocessor
 
+def main():
+    # === Configure external paths ===
+    DATA_DIR   = Path("data/seqs")        # directory with raw FASTA sequences
+    RUN_DIR    = Path("runs/exp001")      # root directory for this experiment
+    INPUTS_DIR = RUN_DIR / "inputs"       # standardized FASTA inputs
+    RAW_DIR    = RUN_DIR / "raw"          # raw outputs from NetSurfP-3
+    PRIORS_DIR = RUN_DIR / "priors"       # processed priors for downstream use
 
-def print_hi(name):
-    # Use a breakpoint in the code line below to debug your script.
-    print(f'Hi, {name}')  # Press ⌘F8 to toggle the breakpoint.
+    # Step 1: Read and standardize input sequences
+    reader = SequenceReader(window_size=None, stride=1, dedup=True, min_len=3)
+    pairs = reader.load(DATA_DIR)                     # read FASTA(s)
+    dataset = reader.build_dataset(pairs)
+    dataset = reader.save_fasta(dataset, INPUTS_DIR)  # write standardized FASTA + index.json
 
+    # Step 2: Run online prediction using NetSurfP-3 (via BioLib)
+    client = OnlineModelClient(
+        app_id="DTU/NetSurfP-3",
+        retries=1,
+        rate_limit_s=0.0,    # increase if you need to throttle requests
+        verbose=True,
+    )
+    raw_index = client.predict(dataset, RAW_DIR)      # raw_index.json + per-sequence outputs
 
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    print_hi('PyCharm')
+    # Step 3: Post-process raw results into unified Prior format
+    pp = PriorPostprocessor()
+    prior_paths = pp.batch(raw_index, PRIORS_DIR)     # *.prior.npz + *.meta.json + prior_index.json
 
-# See PyCharm help at https://www.jetbrains.com/help/pycharm/
+    print(f"[DONE] Generated {len(prior_paths)} priors under {PRIORS_DIR}")
+
+if __name__ == "__main__":
+    main()
+
