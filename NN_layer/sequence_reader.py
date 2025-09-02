@@ -17,7 +17,7 @@ import time
 ALLOWED_AA = set("ACDEFGHIKLMNPQRSTVWY")
 
 # ---------------------------
-# Data structures
+# data structures
 # ---------------------------
 
 @dataclass

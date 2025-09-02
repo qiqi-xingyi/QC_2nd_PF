@@ -25,7 +25,7 @@ except ImportError as e:
     ) from e
 
 
-# ---------- Data types passed between steps ----------
+# ---------- data_set types passed between steps ----------
 
 @dataclass
 class RawArtifact:
