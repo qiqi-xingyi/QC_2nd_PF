@@ -4,7 +4,11 @@
 # @Email : yzhan135@kent.edu
 # @File:online_model_client.py8976
 
-# NN_layer/online_model_client.py
+# --*-- coding:utf-8 --*--
+# @time: 8/28/25 23:38
+# @Author : Yuqi Zhang
+# @Email  : yzhan135@kent.edu
+# @File   : online_model_client.py
 
 from __future__ import annotations
 from dataclasses import dataclass, asdict
@@ -14,28 +18,25 @@ import shutil
 import time
 import json
 import traceback
-from pathlib import Path
 
-
-# Third-party: pip install biolib
+# Third-party: pybiolib provides `import biolib`
 try:
     import biolib
 except ImportError as e:
     raise ImportError(
-        "biolib is required for OnlineModelClient. "
-        "Install with: pip install biolib"
+        "pybiolib is required. Install with: pip install -U pybiolib"
     ) from e
 
 
-# ---------- data_set types passed between steps ----------
+# ---------- Data structures passed between steps ----------
 
 @dataclass
 class RawArtifact:
     """A single model run output for one input FASTA."""
     seq_id: str
     input_fasta: Path
-    output_dir: Path          # local copy of BioLib job outputs
-    main_table: Optional[Path]  # TSV/CSV path if detected
+    output_dir: Path           # local copy of BioLib job outputs
+    main_table: Optional[Path] # TSV/CSV path if detected
     meta: Dict
 
 @dataclass
@@ -45,12 +46,17 @@ class RawArtifactIndex:
     meta: Dict                # run-wide metadata (app id, version, timings, failures)
 
 
-# ---------- Client for NetSurfP-3.0 over BioLib ----------
+# ---------- Client for NetSurfP-3 over BioLib ----------
 
 class OnlineModelClient:
     """
-    Minimal client for submitting standardized FASTA files to NetSurfP-3.0
-    through BioLib, saving the raw outputs locally, and returning an index.
+    Minimal client for submitting standardized FASTA files to NetSurfP-3 via BioLib,
+    saving the raw outputs locally, and returning an index.
+
+    IMPORTANT:
+      - Use AppID 'DTU/NetSurfP-3' (NOT 'DTU/NetSurfP-3.0'); the latter returns 400.
+      - This app requires CLI args: -i <input_fasta>  -o <output_dir>.
+        Therefore we must call .start(i=..., o="out") and then .wait().
     """
 
     def __init__(
@@ -61,6 +67,7 @@ class OnlineModelClient:
         rate_limit_s: float = 0.0,   # sleep between jobs to be gentle with the service
         overwrite: bool = False,
         verbose: bool = True,
+        min_len: int = 10,           # NetSurfP online typically expects len >= 10
     ):
         self.app_id = app_id
         self.timeout_s = timeout_s
@@ -68,17 +75,18 @@ class OnlineModelClient:
         self.rate_limit_s = rate_limit_s
         self.overwrite = overwrite
         self.verbose = verbose
+        self.min_len = min_len
 
         # Preload the BioLib application once
         self._app = biolib.load(self.app_id)
 
-    # Public API -------------------------------------------------------------
+    # -------------------------- Public API ---------------------------------
 
     def predict(self, dataset, out_dir: Path) -> RawArtifactIndex:
         """
-        Submit each FASTA in `dataset.records[*].fasta_path` to NetSurfP-3.0
-        and persist raw outputs under:
-            result/NN_layer/runs/<run_id>/raw/<seq_id>/
+        Submit each FASTA in `dataset.records[*].fasta_path` to NetSurfP-3 and
+        persist raw outputs under:
+            <out_dir>/<seq_id>/
 
         Returns a RawArtifactIndex listing all successful outputs.
         """
@@ -95,21 +103,43 @@ class OnlineModelClient:
             if self.verbose:
                 print(f"[{i+1}/{len(dataset.records)}] Running NetSurfP-3 for: {seq_id}")
 
-            # Per-record output folder
+            # Per-record output folder (local)
             rec_out = out_dir / self._safe(seq_id)
             if rec_out.exists() and self.overwrite:
                 shutil.rmtree(rec_out, ignore_errors=True)
             rec_out.mkdir(parents=True, exist_ok=True)
 
-            # Run job with basic retry
+            # Run job with retries
             ok = False
             last_err = None
             for attempt in range(self.retries + 1):
                 try:
-                    job = self._run_job(fasta_path)
-                    # Copy BioLib job outputs to our rec_out
-                    self._sync_outputs(job.output_path, rec_out)
+                    # Validate FASTA early to avoid opaque remote failures
+                    self._validate_fasta(fasta_path, self.min_len)
+
+                    # Start remote job with required args (-i / -o)
+                    job = self._app.start(i=str(fasta_path), o="out")
+                    job.wait(timeout=self.timeout_s)
+
+                    status = str(job.get_status()).upper()
+
+                    # Always save remote artifacts (incl. stdout/stderr) locally
+                    self._save_job_outputs(job, rec_out)
+
+                    if self.verbose:
+                        try:
+                            out_txt = job.get_stdout()
+                            if out_txt:
+                                print(f"[BioLib][{seq_id}] status={status}  stdout[0:200]: {out_txt[:200]}")
+                        except Exception:
+                            pass
+
+                    if status != "SUCCEEDED":
+                        raise RuntimeError(f"BioLib job status={status}")
+
+                    # Try to locate a main TSV/CSV for downstream parsing
                     main_table = self._find_main_table(rec_out)
+
                     items.append(RawArtifact(
                         seq_id=seq_id,
                         input_fasta=fasta_path,
@@ -117,25 +147,29 @@ class OnlineModelClient:
                         main_table=main_table,
                         meta={
                             "attempt": attempt,
-                            "job_output_path": str(job.output_path),
                             "app_id": self.app_id,
+                            "saved_dir": str(rec_out),
+                            "status": status,
                             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         }
                     ))
                     ok = True
                     break
+
                 except Exception as e:
                     last_err = e
                     if self.verbose:
                         print(f"  -> attempt {attempt+1} failed: {e}")
                         traceback.print_exc()
-                    time.sleep(min(2.0 * (attempt + 1), 5.0))  # simple backoff
+                    # simple backoff before next try
+                    time.sleep(min(2.0 * (attempt + 1), 5.0))
 
             if not ok:
                 failures.append({
                     "seq_id": seq_id,
                     "input_fasta": str(fasta_path),
                     "error": repr(last_err),
+                    "saved_dir": str(rec_out),
                 })
 
             # polite rate limit between jobs if requested
@@ -176,49 +210,7 @@ class OnlineModelClient:
 
         return RawArtifactIndex(items=items, meta=meta)
 
-    # Internals --------------------------------------------------------------
-
-    def _run_job(self, fasta_path: Path):
-        """Run a blocking BioLib job with timeout semantics."""
-        # `run` blocks until completion (BioLib handles server-side queueing).
-        # If you prefer async: start() + wait(timeout=...) and check status.
-        job = self._app.run(input_file=str(fasta_path))
-        # Basic client-side timeout guard (BioLib handles most of it)
-        # Here we just assert job finished by existence of output_path.
-        if not Path(job.output_path).exists():
-            raise RuntimeError("BioLib job finished without a valid output_path")
-        return job
-
-    @staticmethod
-    def _sync_outputs(src_dir: str | Path, dst_dir: Path) -> None:
-        """Copy job outputs into our project folder."""
-        src = Path(src_dir)
-        if not src.exists():
-            raise FileNotFoundError(f"BioLib output directory not found: {src}")
-        # Copytree-like sync; for small outputs a shallow copy is fine.
-        for p in src.iterdir():
-            target = dst_dir / p.name
-            if p.is_dir():
-                if target.exists():
-                    shutil.rmtree(target, ignore_errors=True)
-                shutil.copytree(p, target)
-            else:
-                shutil.copy2(p, target)
-
-    @staticmethod
-    def _find_main_table(out_dir: Path) -> Optional[Path]:
-        """Try to locate the primary TSV/CSV file produced by NetSurfP-3.0."""
-        # Many deployments emit a single TSV/CSV results file; search it.
-        candidates = list(out_dir.glob("*.tsv")) + list(out_dir.glob("*.csv"))
-        if not candidates:
-            # Also check nested dirs (some BioLib apps store in a subdir)
-            for sub in out_dir.iterdir():
-                if sub.is_dir():
-                    candidates.extend(sub.glob("*.tsv"))
-                    candidates.extend(sub.glob("*.csv"))
-                    if candidates:
-                        break
-        return candidates[0] if candidates else None
+    # -------------------------- Internals ----------------------------------
 
     @staticmethod
     def _safe(text: str) -> str:
@@ -230,4 +222,50 @@ class OnlineModelClient:
             else:
                 out.append("_")
         return "".join(out)
+
+    @staticmethod
+    def _find_main_table(out_dir: Path) -> Optional[Path]:
+        """
+        Try to locate the primary TSV/CSV file produced by NetSurfP-3.
+        Help invocations produce no result files; real runs typically emit
+        a tabular summary either at the root or inside the declared output dir.
+        """
+        candidates = list(out_dir.glob("*.tsv")) + list(out_dir.glob("*.csv"))
+        if not candidates:
+            # also check nested dirs (e.g., 'out/')
+            for sub in out_dir.glob("*"):
+                if sub.is_dir():
+                    candidates.extend(sub.glob("*.tsv"))
+                    candidates.extend(sub.glob("*.csv"))
+                    if candidates:
+                        break
+        return candidates[0] if candidates else None
+
+    @staticmethod
+    def _save_job_outputs(job, dst_dir: Path) -> None:
+        """
+        Persist all remote artifacts locally (incl. stdout/stderr and files under -o).
+        """
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            job.save_files(str(dst_dir))
+        except Exception as e:
+            raise RuntimeError(f"Failed to save BioLib job files: {e}")
+
+    @staticmethod
+    def _validate_fasta(fasta_path: Path, min_len: int = 10) -> None:
+        """
+        Basic FASTA sanity checks before sending to BioLib.
+        """
+        txt = Path(fasta_path).read_text().splitlines()
+        if not txt or not txt[0].startswith(">"):
+            raise ValueError(f"FASTA header must start with '>' ({fasta_path})")
+        seq = "".join([ln.strip() for ln in txt[1:] if ln and not ln.startswith(">")]).upper().replace(" ", "")
+        if len(seq) < min_len:
+            raise ValueError(f"Sequence length {len(seq)} < {min_len} in {fasta_path}")
+        allowed = set("ACDEFGHIKLMNPQRSTVWYBXZOU")  # be tolerant for rare letters
+        bad = sorted({ch for ch in seq if ch not in allowed})
+        if bad:
+            raise ValueError(f"Illegal amino-acid letters in {fasta_path}: {bad}")
+
 
