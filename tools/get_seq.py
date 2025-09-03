@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 
 # ====== CONFIG (edit here if needed) =========================================
-ROOT_IN = Path("data/Quantum_original_data")   # where 125 folders live
-OUT_FASTA_DIR = Path("data/seqs")              # per-id FASTA output
-OUT_CSV = Path("data/seqs.csv")                # summary CSV (id,sequence)
+# go up one level from tools/ to project root
+ROOT_IN = Path(__file__).resolve().parent.parent / "data" / "Quantum_original_data"
+OUT_FASTA_DIR = Path(__file__).resolve().parent.parent / "data" / "seqs"
+OUT_CSV = Path(__file__).resolve().parent.parent / "data" / "seqs.csv"
 CHECK_CONSISTENCY = True                       # warn if top_k sequences differ
 # ============================================================================
 
