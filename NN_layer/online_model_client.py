@@ -135,7 +135,9 @@ class OnlineModelClient:
                         except Exception:
                             pass
 
-                    if status != "SUCCEEDED":
+                    # --- SUCCESS STATES ---
+                    SUCCESS = {"SUCCEEDED", "COMPLETED", "COMPLETED_WITH_WARNINGS"}
+                    if status not in SUCCESS:
                         raise RuntimeError(f"BioLib job status={status}")
 
                     # Try to locate a main TSV/CSV for downstream parsing
@@ -253,7 +255,8 @@ class OnlineModelClient:
         """Persist all remote artifacts locally (incl. stdout/stderr and files under -o)."""
         dst_dir.mkdir(parents=True, exist_ok=True)
         try:
-            job.save_files(str(dst_dir))
+            # allow overwriting to avoid duplicate-file errors on retries
+            job.save_files(str(dst_dir), overwrite=True)
         except Exception as e:
             raise RuntimeError(f"Failed to save BioLib job files: {e}")
 
