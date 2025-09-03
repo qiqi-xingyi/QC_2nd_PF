@@ -4,7 +4,6 @@
 # @Email : yzhan135@kent.edu
 # @File:get_seq.py
 
-
 from __future__ import annotations
 from pathlib import Path
 from typing import List, Tuple, Optional
