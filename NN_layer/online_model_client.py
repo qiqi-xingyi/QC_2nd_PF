@@ -53,7 +53,7 @@ class OnlineModelClient:
 
     def __init__(
         self,
-        app_id: str = "DTU/NetSurfP-3.0",
+        app_id: str = "DTU/NetSurfP-3",
         timeout_s: int = 3600,
         retries: int = 1,
         rate_limit_s: float = 0.0,   # sleep between jobs to be gentle with the service
