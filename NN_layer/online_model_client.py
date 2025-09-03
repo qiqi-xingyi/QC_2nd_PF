@@ -12,6 +12,7 @@ import shutil
 import time
 import json
 import traceback
+import shlex  # for safe shell quoting
 
 # Third-party: pybiolib provides `import biolib`
 try:
@@ -49,17 +50,17 @@ class OnlineModelClient:
     saving the raw outputs locally, and returning an index.
 
     IMPORTANT:
-      - Use AppID 'DTU/NetSurfP-3' (NOT 'DTU/NetSurfP-3.0'); the latter returns 400.
+      - Use AppID 'DTU/NetSurfP-3' (NOT 'DTU/NetSurfP-3.0').
       - This app requires CLI args: -i <input_fasta>  -o <output_dir>.
-        Therefore we must call .start(i=..., o="out"); .wait(); then save files.
+        Pass them as a SINGLE CLI STRING via `app.cli(args="...")`.
     """
 
     def __init__(
         self,
         app_id: str = "DTU/NetSurfP-3",
-        timeout_s: int = 3600,         # kept for API symmetry; not used by biolib.wait()
+        timeout_s: int = 3600,         # kept for API symmetry; cli() blocks until done
         retries: int = 2,              # total attempts = retries + 1
-        rate_limit_s: float = 2.0,     # be gentle between jobs
+        rate_limit_s: float = 2.0,     # gentle between jobs
         overwrite: bool = False,
         verbose: bool = True,
         min_len: int = 10,             # NetSurfP online typically expects len >= 10
@@ -114,9 +115,13 @@ class OnlineModelClient:
                     # Validate FASTA early to avoid opaque remote failures
                     self._validate_fasta(fasta_path, self.min_len)
 
-                    # ---- KEY CHANGE: use start + wait (no timeout kw) ----
-                    job = self._app.start(i=str(fasta_path), o="out")
-                    job.wait()  # don't pass timeout; this pybiolib doesn't accept it
+                    # Build CLI string exactly as the app expects: -i <file> -o out
+                    # Use shlex.quote to protect spaces/special chars in paths.
+                    args = f"-i {shlex.quote(str(fasta_path))} -o out"
+
+                    # CLI is blocking; will return a Result object whether succeeded or failed
+                    job = self._app.cli(args=args)
+
                     status = str(job.get_status()).upper()
 
                     # Always save remote artifacts (incl. stdout/stderr) locally
