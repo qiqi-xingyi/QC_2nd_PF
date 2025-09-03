@@ -19,7 +19,7 @@ import sys
 
 # ---------- Project paths (tools/ and data/ are siblings) ----------
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-SEQ_DIR      = PROJECT_ROOT / "data" / "seqs"         # input FASTA directory
+SEQ_DIR = PROJECT_ROOT / "data" / "seqs_len10"        # input FASTA directory
 PRIORS_ROOT  = PROJECT_ROOT / "runs" / "exp001"       # priors will be placed under this run
 RUN_ID       = "exp001"                               # subfolder name under runs/
 SKIP_IF_EXISTS = True                                  # do not recompute if <id>.prior.npz exists
