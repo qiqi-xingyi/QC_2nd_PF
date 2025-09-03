@@ -1,9 +1,3 @@
-# --*-- conding:utf-8 --*--
-# @time:8/28/25 23:38
-# @Author : Yuqi Zhang
-# @Email : yzhan135@kent.edu
-# @File:online_model_client.py8976
-
 # --*-- coding:utf-8 --*--
 # @time: 8/28/25 23:38
 # @Author : Yuqi Zhang
@@ -22,6 +16,7 @@ import traceback
 # Third-party: pybiolib provides `import biolib`
 try:
     import biolib
+    from biolib._internal.http_client import HttpError  # for error pattern detection
 except ImportError as e:
     raise ImportError(
         "pybiolib is required. Install with: pip install -U pybiolib"
@@ -56,18 +51,19 @@ class OnlineModelClient:
     IMPORTANT:
       - Use AppID 'DTU/NetSurfP-3' (NOT 'DTU/NetSurfP-3.0'); the latter returns 400.
       - This app requires CLI args: -i <input_fasta>  -o <output_dir>.
-        Therefore we must call .start(i=..., o="out") and then .wait().
+        Therefore we must call .run(i=..., o="out") which blocks until completion.
     """
 
     def __init__(
         self,
         app_id: str = "DTU/NetSurfP-3",
-        timeout_s: int = 3600,
-        retries: int = 1,
-        rate_limit_s: float = 0.0,   # sleep between jobs to be gentle with the service
+        timeout_s: int = 3600,         # kept for API symmetry; not used by biolib.run()
+        retries: int = 2,              # total attempts = retries + 1
+        rate_limit_s: float = 2.0,     # be gentle between jobs
         overwrite: bool = False,
         verbose: bool = True,
-        min_len: int = 10,           # NetSurfP online typically expects len >= 10
+        min_len: int = 10,             # NetSurfP online typically expects len >= 10
+        long_backoff_s: int = 60,      # initial backoff for compute_limit_exceeded
     ):
         self.app_id = app_id
         self.timeout_s = timeout_s
@@ -76,6 +72,7 @@ class OnlineModelClient:
         self.overwrite = overwrite
         self.verbose = verbose
         self.min_len = min_len
+        self.long_backoff_s = long_backoff_s
 
         # Preload the BioLib application once
         self._app = biolib.load(self.app_id)
@@ -117,10 +114,8 @@ class OnlineModelClient:
                     # Validate FASTA early to avoid opaque remote failures
                     self._validate_fasta(fasta_path, self.min_len)
 
-                    # Start remote job with required args (-i / -o)
-                    job = self._app.start(i=str(fasta_path), o="out")
-                    job.wait(timeout=self.timeout_s)
-
+                    # Blocking run with required args (-i / -o)
+                    job = self._app.run(i=str(fasta_path), o="out")
                     status = str(job.get_status()).upper()
 
                     # Always save remote artifacts (incl. stdout/stderr) locally
@@ -161,8 +156,15 @@ class OnlineModelClient:
                     if self.verbose:
                         print(f"  -> attempt {attempt+1} failed: {e}")
                         traceback.print_exc()
-                    # simple backoff before next try
-                    time.sleep(min(2.0 * (attempt + 1), 5.0))
+
+                    # Handle compute_limit_exceeded with longer backoff
+                    sleep_s = min(5.0 * (attempt + 1), 15.0)  # default short backoff
+                    if isinstance(e, HttpError) and "compute_limit_exceeded" in str(e):
+                        sleep_s = self.long_backoff_s * (attempt + 1)
+                        if self.verbose:
+                            print(f"  -> server under high load; backing off for {sleep_s}s")
+
+                    time.sleep(sleep_s)
 
             if not ok:
                 failures.append({
@@ -227,8 +229,7 @@ class OnlineModelClient:
     def _find_main_table(out_dir: Path) -> Optional[Path]:
         """
         Try to locate the primary TSV/CSV file produced by NetSurfP-3.
-        Help invocations produce no result files; real runs typically emit
-        a tabular summary either at the root or inside the declared output dir.
+        Real runs typically emit a tabular summary either at the root or inside the declared output dir.
         """
         candidates = list(out_dir.glob("*.tsv")) + list(out_dir.glob("*.csv"))
         if not candidates:
@@ -243,9 +244,7 @@ class OnlineModelClient:
 
     @staticmethod
     def _save_job_outputs(job, dst_dir: Path) -> None:
-        """
-        Persist all remote artifacts locally (incl. stdout/stderr and files under -o).
-        """
+        """Persist all remote artifacts locally (incl. stdout/stderr and files under -o)."""
         dst_dir.mkdir(parents=True, exist_ok=True)
         try:
             job.save_files(str(dst_dir))
@@ -254,9 +253,7 @@ class OnlineModelClient:
 
     @staticmethod
     def _validate_fasta(fasta_path: Path, min_len: int = 10) -> None:
-        """
-        Basic FASTA sanity checks before sending to BioLib.
-        """
+        """Basic FASTA sanity checks before sending to BioLib."""
         txt = Path(fasta_path).read_text().splitlines()
         if not txt or not txt[0].startswith(">"):
             raise ValueError(f"FASTA header must start with '>' ({fasta_path})")
@@ -267,5 +264,3 @@ class OnlineModelClient:
         bad = sorted({ch for ch in seq if ch not in allowed})
         if bad:
             raise ValueError(f"Illegal amino-acid letters in {fasta_path}: {bad}")
-
-
