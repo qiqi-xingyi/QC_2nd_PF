@@ -14,6 +14,8 @@ import shutil
 import time
 import json
 import traceback
+from pathlib import Path
+
 
 # Third-party: pip install biolib
 try:
