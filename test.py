@@ -4,9 +4,22 @@
 # @Email : yzhan135@kent.edu
 # @File:test.py
 
+from pathlib import Path
 import biolib
 
-if __name__ == '__main__':
+if __name__ == "__main__":
+    app = biolib.load("DTU/NetSurfP-3")
+    job = app.cli(args="--help", blocking=False)
+    job.wait()
 
-    netsurfp_3 = biolib.load('DTU/NetSurfP-3')
-    print(netsurfp_3.cli(args='--help'))
+    print("status:", job.get_status())
+
+    outdir = Path("biolib_help_dump")
+    outdir.mkdir(exist_ok=True)
+    job.save_files(str(outdir))
+    print("saved:", job.list_output_files())
+
+    try:
+        print(job.get_stdout())
+    except Exception:
+        pass
