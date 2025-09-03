@@ -51,13 +51,13 @@ class OnlineModelClient:
     IMPORTANT:
       - Use AppID 'DTU/NetSurfP-3' (NOT 'DTU/NetSurfP-3.0'); the latter returns 400.
       - This app requires CLI args: -i <input_fasta>  -o <output_dir>.
-        Therefore we must call .run(i=..., o="out") which blocks until completion.
+        Therefore we must call .start(i=..., o="out"); .wait(); then save files.
     """
 
     def __init__(
         self,
         app_id: str = "DTU/NetSurfP-3",
-        timeout_s: int = 3600,         # kept for API symmetry; not used by biolib.run()
+        timeout_s: int = 3600,         # kept for API symmetry; not used by biolib.wait()
         retries: int = 2,              # total attempts = retries + 1
         rate_limit_s: float = 2.0,     # be gentle between jobs
         overwrite: bool = False,
@@ -114,8 +114,9 @@ class OnlineModelClient:
                     # Validate FASTA early to avoid opaque remote failures
                     self._validate_fasta(fasta_path, self.min_len)
 
-                    # Blocking run with required args (-i / -o)
-                    job = self._app.run(i=str(fasta_path), o="out")
+                    # ---- KEY CHANGE: use start + wait (no timeout kw) ----
+                    job = self._app.start(i=str(fasta_path), o="out")
+                    job.wait()  # don't pass timeout; this pybiolib doesn't accept it
                     status = str(job.get_status()).upper()
 
                     # Always save remote artifacts (incl. stdout/stderr) locally
