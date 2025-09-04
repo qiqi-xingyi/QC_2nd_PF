@@ -7,7 +7,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 import shutil
 import time
 import json
@@ -31,15 +31,15 @@ class RawArtifact:
     """A single model run output for one input FASTA."""
     seq_id: str
     input_fasta: Path
-    output_dir: Path           # local copy of BioLib job outputs
-    main_table: Optional[Path] # TSV/CSV path if detected
+    output_dir: Path            # local copy of BioLib job outputs
+    main_table: Optional[Path]  # TSV/CSV path if detected
     meta: Dict
 
 @dataclass
 class RawArtifactIndex:
     """Collection of raw outputs for downstream post-processing."""
     items: List[RawArtifact]
-    meta: Dict                # run-wide metadata (app id, version, timings, failures)
+    meta: Dict                  # run-wide metadata (app id, version, timings, failures)
 
 
 # ---------- Client for NetSurfP-3 over BioLib ----------
@@ -51,7 +51,7 @@ class OnlineModelClient:
 
     IMPORTANT:
       - Use AppID 'DTU/NetSurfP-3' (NOT 'DTU/NetSurfP-3.0').
-      - This app requires CLI args: -i <input_fasta>  -o <output_dir>.
+      - The app expects CLI args: -i <input_fasta>  -o <output_dir>.
         Pass them as a SINGLE CLI STRING via `app.cli(args="...")`.
     """
 
@@ -99,7 +99,7 @@ class OnlineModelClient:
             seq_id = rec.seq_id
             fasta_path = Path(rec.fasta_path)
             if self.verbose:
-                print(f"[{i+1}/{len(dataset.records)}] Running NetSurfP-3 for: {seq_id}")
+                print(f"[{i+1}/{len(dataset.records)}] Running NetSurfP-3 for: {seq_id}", flush=True)
 
             # Per-record output folder (local)
             rec_out = out_dir / self._safe(seq_id)
@@ -116,7 +116,6 @@ class OnlineModelClient:
                     self._validate_fasta(fasta_path, self.min_len)
 
                     # Build CLI string exactly as the app expects: -i <file> -o out
-                    # Use shlex.quote to protect spaces/special chars in paths.
                     args = f"-i {shlex.quote(str(fasta_path))} -o out"
 
                     # CLI is blocking; will return a Result object whether succeeded or failed
@@ -125,13 +124,14 @@ class OnlineModelClient:
                     status = str(job.get_status()).upper()
 
                     # Always save remote artifacts (incl. stdout/stderr) locally
-                    self._save_job_outputs(job, rec_out)
+                    # and explicitly fetch results.csv/json if present
+                    csv_path, json_path = self._save_job_outputs(job, rec_out)
 
                     if self.verbose:
                         try:
                             out_txt = job.get_stdout()
                             if out_txt:
-                                print(f"[BioLib][{seq_id}] status={status}  stdout[0:200]: {out_txt[:200]}")
+                                print(f"[BioLib][{seq_id}] status={status}  stdout[0:200]: {out_txt[:200]}", flush=True)
                         except Exception:
                             pass
 
@@ -140,8 +140,8 @@ class OnlineModelClient:
                     if status not in SUCCESS:
                         raise RuntimeError(f"BioLib job status={status}")
 
-                    # Try to locate a main TSV/CSV for downstream parsing
-                    main_table = self._find_main_table(rec_out)
+                    # Prefer CSV as main table if we grabbed it; else try to locate any table
+                    main_table = csv_path or self._find_main_table(rec_out)
 
                     items.append(RawArtifact(
                         seq_id=seq_id,
@@ -153,6 +153,8 @@ class OnlineModelClient:
                             "app_id": self.app_id,
                             "saved_dir": str(rec_out),
                             "status": status,
+                            "csv": (str(csv_path) if csv_path else None),
+                            "json": (str(json_path) if json_path else None),
                             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         }
                     ))
@@ -162,16 +164,14 @@ class OnlineModelClient:
                 except Exception as e:
                     last_err = e
                     if self.verbose:
-                        print(f"  -> attempt {attempt+1} failed: {e}")
+                        print(f"  -> attempt {attempt+1} failed: {e}", flush=True)
                         traceback.print_exc()
-
                     # Handle compute_limit_exceeded with longer backoff
                     sleep_s = min(5.0 * (attempt + 1), 15.0)  # default short backoff
                     if isinstance(e, HttpError) and "compute_limit_exceeded" in str(e):
                         sleep_s = self.long_backoff_s * (attempt + 1)
                         if self.verbose:
-                            print(f"  -> server under high load; backing off for {sleep_s}s")
-
+                            print(f"  -> server under high load; backing off for {sleep_s}s", flush=True)
                     time.sleep(sleep_s)
 
             if not ok:
@@ -214,9 +214,9 @@ class OnlineModelClient:
         )
 
         if self.verbose:
-            print(f"[OK] NetSurfP-3 runs completed: {len(items)} success, {len(failures)} failed")
+            print(f"[OK] NetSurfP-3 runs completed: {len(items)} success, {len(failures)} failed", flush=True)
             if failures:
-                print("     See failures in raw_index.json")
+                print("     See failures in raw_index.json", flush=True)
 
         return RawArtifactIndex(items=items, meta=meta)
 
@@ -236,12 +236,10 @@ class OnlineModelClient:
     @staticmethod
     def _find_main_table(out_dir: Path) -> Optional[Path]:
         """
-        Try to locate the primary TSV/CSV file produced by NetSurfP-3.
-        Real runs typically emit a tabular summary either at the root or inside the declared output dir.
+        Try to locate a primary TSV/CSV file in the saved outputs directory.
         """
         candidates = list(out_dir.glob("*.tsv")) + list(out_dir.glob("*.csv"))
         if not candidates:
-            # also check nested dirs (e.g., 'out/')
             for sub in out_dir.glob("*"):
                 if sub.is_dir():
                     candidates.extend(sub.glob("*.tsv"))
@@ -250,15 +248,47 @@ class OnlineModelClient:
                         break
         return candidates[0] if candidates else None
 
-    @staticmethod
-    def _save_job_outputs(job, dst_dir: Path) -> None:
-        """Persist all remote artifacts locally (incl. stdout/stderr and files under -o)."""
+    def _save_job_outputs(self, job, dst_dir: Path) -> Tuple[Optional[Path], Optional[Path]]:
+        """
+        Persist all remote artifacts locally (incl. stdout/stderr and default files),
+        and explicitly pull results.csv / results.json if present.
+
+        Returns:
+            (csv_path, json_path) — paths under dst_dir if files were fetched, else None.
+        """
         dst_dir.mkdir(parents=True, exist_ok=True)
+        csv_path: Optional[Path] = None
+        json_path: Optional[Path] = None
+
+        # 1) Save default artifacts (output.md, images, stdout/stderr, etc.)
         try:
-            # allow overwriting to avoid duplicate-file errors on retries
             job.save_files(str(dst_dir), overwrite=True)
         except Exception as e:
             raise RuntimeError(f"Failed to save BioLib job files: {e}")
+
+        # 2) Some BioLib apps expose additional downloadable files not included by default
+        #    (as links in output.md). Try to fetch them explicitly.
+        try:
+            files = job.get_files()  # dict-like; keys are filenames available for download
+            # Prefer canonical names; otherwise pick any *.csv/*.json
+            csv_name = "results.csv" if "results.csv" in files else next((k for k in files if k.lower().endswith(".csv")), None)
+            json_name = "results.json" if "results.json" in files else next((k for k in files if k.lower().endswith(".json")), None)
+
+            if csv_name:
+                target = dst_dir / Path(csv_name).name
+                job.save_file(csv_name, str(target), overwrite=True)
+                csv_path = target
+
+            if json_name:
+                target = dst_dir / Path(json_name).name
+                job.save_file(json_name, str(target), overwrite=True)
+                json_path = target
+
+        except Exception:
+            # If the API does not expose get_files/save_file for this app, just ignore.
+            pass
+
+        return csv_path, json_path
 
     @staticmethod
     def _validate_fasta(fasta_path: Path, min_len: int = 10) -> None:
