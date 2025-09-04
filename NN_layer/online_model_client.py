@@ -46,7 +46,7 @@ class RawArtifactIndex:
 
 class OnlineModelClient:
     """
-    Minimal client for submitting standardized FASTA files to NetSurfP-3 via BioLib,
+    Client for submitting FASTA files to NetSurfP-3 via BioLib,
     saving the raw outputs locally, and returning an index.
 
     IMPORTANT:
@@ -95,11 +95,13 @@ class OnlineModelClient:
         failures: List[Dict] = []
         t0 = time.time()
 
+        total = len(dataset.records)
+
         for i, rec in enumerate(dataset.records):
             seq_id = rec.seq_id
             fasta_path = Path(rec.fasta_path)
-            if self.verbose:
-                print(f"[{i+1}/{len(dataset.records)}] Running NetSurfP-3 for: {seq_id}", flush=True)
+
+            print(f"[{i+1}/{total}] Running NetSurfP-3 for: {seq_id}", flush=True)
 
             # Per-record output folder (local)
             rec_out = out_dir / self._safe(seq_id)
@@ -107,9 +109,10 @@ class OnlineModelClient:
                 shutil.rmtree(rec_out, ignore_errors=True)
             rec_out.mkdir(parents=True, exist_ok=True)
 
-            # Run job with retries
+            start_t = time.time()
             ok = False
             last_err = None
+
             for attempt in range(self.retries + 1):
                 try:
                     # Validate FASTA early to avoid opaque remote failures
@@ -118,22 +121,24 @@ class OnlineModelClient:
                     # Build CLI string exactly as the app expects: -i <file> -o out
                     args = f"-i {shlex.quote(str(fasta_path))} -o out"
 
-                    # CLI is blocking; will return a Result object whether succeeded or failed
-                    job = self._app.cli(args=args)
-
+                    print(f"[{seq_id}] submitting job (attempt {attempt+1}) ...", flush=True)
+                    job = self._app.cli(args=args)  # blocking call
                     status = str(job.get_status()).upper()
+                    print(f"[{seq_id}] job returned with status={status}", flush=True)
 
                     # Always save remote artifacts (incl. stdout/stderr) locally
-                    # and explicitly fetch results.csv/json if present
                     csv_path, json_path = self._save_job_outputs(job, rec_out)
 
-                    if self.verbose:
-                        try:
-                            out_txt = job.get_stdout()
-                            if out_txt:
-                                print(f"[BioLib][{seq_id}] status={status}  stdout[0:200]: {out_txt[:200]}", flush=True)
-                        except Exception:
-                            pass
+                    # Mirror a short preview of stdout to console
+                    try:
+                        out_txt = job.get_stdout()
+                        if out_txt:
+                            preview = out_txt[:200]
+                            if isinstance(preview, bytes):
+                                preview = preview.decode(errors="ignore")
+                            print(f"[BioLib][{seq_id}] stdout[0:200]: {preview}", flush=True)
+                    except Exception:
+                        pass
 
                     # --- SUCCESS STATES ---
                     SUCCESS = {"SUCCEEDED", "COMPLETED", "COMPLETED_WITH_WARNINGS"}
@@ -158,20 +163,25 @@ class OnlineModelClient:
                             "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                         }
                     ))
+
+                    elapsed = time.time() - start_t
+                    print(f"[DONE] {seq_id}  status={status}  saved={rec_out}  elapsed={elapsed:.1f}s",
+                          flush=True)
+
                     ok = True
                     break
 
                 except Exception as e:
                     last_err = e
-                    if self.verbose:
-                        print(f"  -> attempt {attempt+1} failed: {e}", flush=True)
-                        traceback.print_exc()
+                    print(f"  -> attempt {attempt+1} failed: {e}", flush=True)
+                    traceback.print_exc()
+
                     # Handle compute_limit_exceeded with longer backoff
                     sleep_s = min(5.0 * (attempt + 1), 15.0)  # default short backoff
                     if isinstance(e, HttpError) and "compute_limit_exceeded" in str(e):
                         sleep_s = self.long_backoff_s * (attempt + 1)
-                        if self.verbose:
-                            print(f"  -> server under high load; backing off for {sleep_s}s", flush=True)
+                        print(f"  -> server under high load; backing off for {sleep_s}s", flush=True)
+
                     time.sleep(sleep_s)
 
             if not ok:
@@ -181,6 +191,9 @@ class OnlineModelClient:
                     "error": repr(last_err),
                     "saved_dir": str(rec_out),
                 })
+                elapsed = time.time() - start_t
+                print(f"[FAIL] {seq_id}  saved={rec_out}  elapsed={elapsed:.1f}s  error={last_err}",
+                      flush=True)
 
             # polite rate limit between jobs if requested
             if self.rate_limit_s > 0:
@@ -213,10 +226,9 @@ class OnlineModelClient:
             }, ensure_ascii=False, indent=2)
         )
 
-        if self.verbose:
-            print(f"[OK] NetSurfP-3 runs completed: {len(items)} success, {len(failures)} failed", flush=True)
-            if failures:
-                print("     See failures in raw_index.json", flush=True)
+        print(f"[OK] NetSurfP-3 runs completed: {len(items)} success, {len(failures)} failed", flush=True)
+        if failures:
+            print("     See failures in raw_index.json", flush=True)
 
         return RawArtifactIndex(items=items, meta=meta)
 
@@ -262,6 +274,7 @@ class OnlineModelClient:
 
         # 1) Save default artifacts (output.md, images, stdout/stderr, etc.)
         try:
+            # allow overwriting to avoid duplicate-file errors on retries
             job.save_files(str(dst_dir), overwrite=True)
         except Exception as e:
             raise RuntimeError(f"Failed to save BioLib job files: {e}")
@@ -270,7 +283,6 @@ class OnlineModelClient:
         #    (as links in output.md). Try to fetch them explicitly.
         try:
             files = job.get_files()  # dict-like; keys are filenames available for download
-            # Prefer canonical names; otherwise pick any *.csv/*.json
             csv_name = "results.csv" if "results.csv" in files else next((k for k in files if k.lower().endswith(".csv")), None)
             json_name = "results.json" if "results.json" in files else next((k for k in files if k.lower().endswith(".json")), None)
 
