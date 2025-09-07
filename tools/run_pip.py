@@ -8,7 +8,7 @@
 End-to-end runner:
 - Read sequences from data/seqs
 - Generate AI priors via NN_layer
-- Rescore existing VQE candidates via Mid_layer
+- Rescore existing VQE candidates via E_rerank
 
 Directory assumptions (all paths resolved relative to project root):
   data/
@@ -57,9 +57,9 @@ except Exception:
 
 # --- Mid layer (rescoring) ---
 try:
-    from Mid_layer import Rescorer, RescoreConfig
+    from E_rerank import Rescorer, RescoreConfig
 except Exception as e:
-    print(f"[ERROR] Mid_layer not importable: {e}", file=sys.stderr)
+    print(f"[ERROR] E_rerank not importable: {e}", file=sys.stderr)
     raise
 
 def ensure_dir(p: Path) -> None:
