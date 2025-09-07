@@ -4,50 +4,15 @@
 # @Email : yzhan135@kent.edu
 # @File:rerank.py
 
-# ─────────────────────────────────────────────────────────────────────────────
-# File: E_rerank/rerank.py
-# ─────────────────────────────────────────────────────────────────────────────
+"""
+E_rerank.rerank (fixed):
+- Robust energy parser supports lines like: "Rank 1: 6592.7348".
+- Candidate discovery accepts files with or without the .xyz extension.
+
+Drop-in replacement for E_rerank/rerank.py
+"""
+
 from __future__ import annotations
-"""
-E_rerank.rerank
-
-Core class to fuse NetSurfP-3.0 priors with quantum energies and re-rank
-candidate structures. Also provides a small CLI for batch processing.
-
-Typical usage (library):
-
-    from E_rerank import ERerank
-    rr = ERerank(
-        quantum_root="./data/Quantum_original_data",
-        nsp_root="./nn_result",
-        out_root="./E_rerank/out",
-        ss_mode="ss3",
-        alpha=1.0, beta=1.0, gamma=1.0,
-    )
-    rr.run(index_file="./data/data_set/fragments.tsv")
-
-CLI (after installing the package):
-
-    python -m E_rerank \
-      --quantum_root ./data/Quantum_original_data \
-      --nsp_root ./nn_result \
-      --out_root ./E_rerank/out \
-      --index_file ./data/data_set/fragments.tsv \
-      --ss_mode ss3 --alpha 1 --beta 1 --gamma 1
-
-Directory expectation (per pdbid under quantum_root):
-    <pdbid>/
-        <pdbid>_top_1.xyz .. <pdbid>_top_5.xyz
-        top_5_energies_<pdbid>.txt | energy_list_<pdbid>.txt | energies_<pdbid>.txt
-    Optional: angles_<pdbid>.csv with columns
-        cid, phi_hat_0..phi_hat_{L-1}, psi_hat_0..psi_hat_{L-1}
-
-NetSurfP TSV (under nsp_root):
-    <pdbid>.tsv (or .csv) with columns like:
-        idx, aa, ss8_p0..ss8_p7, ss3_p0..ss3_p2, dis_p0, dis_p1, rsa, asa, phi, psi
-    (Headerless files supported; columns detected heuristically.)
-"""
-
 import os
 import json
 import shutil
@@ -57,7 +22,6 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-# Local import (ensure fusion_reranker.py is installed/available on path)
 try:
     from fusion_reranker import FusionReRanker, Candidate
 except Exception:  # pragma: no cover
@@ -74,32 +38,6 @@ class Paths:
 
 
 class ERerank:
-    """Fuse NetSurfP priors with quantum energies and re-rank candidates.
-
-    Parameters
-    ----------
-    quantum_root : str
-        Root folder containing per-pdbid subfolders with xyz and energy files.
-    nsp_root : str
-        Folder containing NetSurfP outputs with filenames <pdbid>.tsv or .csv.
-    out_root : str
-        Output root. Per-pdbid results will be created here.
-    ss_mode : {"ss3","ss8"}
-        Which prior distribution to use (3-class or 8-class secondary structure).
-    dist : {"l2","kl","ce"}
-        Distance/divergence for SS distribution mismatch.
-    angle_weight : {"uniform","rsa"}
-        Residue-wise angle weights. If "rsa", uses NetSurfP RSA when available.
-    normalize_terms : bool
-        Whether to min–max normalize E_q, D_ss, D_phi_psi before fusion.
-    alpha, beta, gamma : float
-        Fusion weights for (E_q, D_ss, D_phi_psi).
-    max_candidates : int
-        Number of top-k xyz candidates per pdbid to consider.
-    random_seed : int
-        RNG seed for any stochastic fallback (currently unused).
-    """
-
     def __init__(
         self,
         quantum_root: str,
@@ -125,20 +63,13 @@ class ERerank:
         self.rng = np.random.default_rng(random_seed)
         os.makedirs(out_root, exist_ok=True)
 
-    # ---------------------------- public API ----------------------------
     def run(self, index_file: str) -> None:
-        """Process all PDBIDs listed in index_file.
-
-        index_file must be CSV/TSV with at least a column 'pdbid'.
-        (Additional columns, e.g., 'seq', are accepted and ignored.)
-        """
         idx = pd.read_csv(index_file, sep=None, engine="python")
         if "pdbid" not in idx.columns:
             raise ValueError("index_file must contain column 'pdbid'")
         for pdbid in idx["pdbid"].astype(str):
             self._process_one(pdbid)
 
-    # ---------------------------- core steps ----------------------------
     def _process_one(self, pdbid: str) -> None:
         q_dir = os.path.join(self.paths.quantum_root, pdbid)
         out_dir = os.path.join(self.paths.out_root, pdbid)
@@ -155,20 +86,23 @@ class ERerank:
         if not os.path.isdir(q_dir):
             raise FileNotFoundError(f"Quantum directory not found: {q_dir}")
 
-        # discover xyz files
+        # discover files: accept with or without .xyz extension
         cand_map: Dict[str, str] = {}
         for i in range(1, 100):
-            p = os.path.join(q_dir, f"{pdbid}_top_{i}.xyz")
-            if os.path.isfile(p):
-                cand_map[f"top_{i}"] = p
+            p1 = os.path.join(q_dir, f"{pdbid}_top_{i}.xyz")
+            p2 = os.path.join(q_dir, f"{pdbid}_top_{i}")
+            if os.path.isfile(p1):
+                cand_map[f"top_{i}"] = p1
+            elif os.path.isfile(p2):
+                cand_map[f"top_{i}"] = p2
             else:
                 break
         if not cand_map:
-            raise FileNotFoundError(f"No candidate xyz files like {pdbid}_top_1.xyz under {q_dir}")
-        # limit to max_candidates
+            raise FileNotFoundError(f"No candidate files like {pdbid}_top_1(.xyz) under {q_dir}")
+
         cand_map = dict(list(sorted(cand_map.items(), key=lambda x: int(x[0].split('_')[-1])))[: self.max_candidates])
 
-        # read energies
+        # energy files
         energy_files = [
             os.path.join(q_dir, f"top_5_energies_{pdbid}.txt"),
             os.path.join(q_dir, f"energy_list_{pdbid}.txt"),
@@ -180,23 +114,28 @@ class ERerank:
                 energies = self._read_energy_file(ef)
                 break
         if energies is None:
-            # generic csv/tsv with 'energy' column
+            # generic csv/tsv/txt with 'energy' in filename
             for fn in os.listdir(q_dir):
-                if fn.lower().endswith((".csv", ".tsv")) and "energy" in fn.lower():
+                if fn.lower().endswith((".csv", ".tsv", ".txt")) and "energy" in fn.lower():
                     energies = self._read_energy_file(os.path.join(q_dir, fn))
                     break
         if energies is None:
             raise FileNotFoundError(f"Cannot find an energy file in {q_dir}")
 
-        # align length
         if len(energies) < len(cand_map):
             raise ValueError(f"Energy list shorter ({len(energies)}) than candidates ({len(cand_map)})")
         energies = energies[: len(cand_map)]
         return energies, cand_map
 
     def _read_energy_file(self, path: str) -> List[float]:
+        """Supported formats:
+        - CSV/TSV with a column named like 'energy'
+        - Plain text with one value per line
+        - Lines like: "Rank 1: 6592.7348" (extract last float per line)
+        """
+        import re
         ext = os.path.splitext(path)[1].lower()
-        if ext in (".csv", ".tsv", ".txt"):
+        if ext in (".csv", ".tsv"):
             try:
                 df = pd.read_csv(path, sep=None, engine="python")
                 for col in df.columns:
@@ -204,15 +143,25 @@ class ERerank:
                         return df[col].astype(float).tolist()
             except Exception:
                 pass
-        # fallback: one value per line
+        # text parsing
         vals: List[float] = []
+        float_re = re.compile(r"[-+]?((\d+\.?\d*)|(\.\d+))([eE][-+]?\d+)?")
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
-                s = line.strip().split()
+                s = line.strip()
                 if not s:
                     continue
+                m = list(float_re.finditer(s))
+                if m:
+                    try:
+                        vals.append(float(m[-1].group(0)))
+                        continue
+                    except ValueError:
+                        pass
+                # fallback: first token
+                tok = s.split()[0]
                 try:
-                    vals.append(float(s[0]))
+                    vals.append(float(tok))
                 except ValueError:
                     continue
         if not vals:
@@ -231,7 +180,6 @@ class ERerank:
 
         df = pd.read_csv(tsv_path, sep=None, engine="python", header=None)
         numeric = df.apply(pd.to_numeric, errors="coerce")
-        # locate phi/psi as last two numeric columns
         fin_mask = numeric.notna()
         valid_cols = [i for i in range(numeric.shape[1]) if fin_mask.iloc[:, i].any()]
         if len(valid_cols) < 2:
@@ -239,7 +187,6 @@ class ERerank:
         psi_col = valid_cols[-1]
         phi_col = valid_cols[-2]
 
-        # ss8 block is 8 columns right after aa (index=2..9), ss3 block is next 3 columns
         ss8_start = 2
         ss8 = numeric.iloc[:, ss8_start : ss8_start + 8].to_numpy(float)
         ss3_start = ss8_start + 8
@@ -251,7 +198,6 @@ class ERerank:
         psi = numeric.iloc[:, psi_col].to_numpy(float)
 
         ss_probs = ss3 if self.ss_mode == "ss3" else ss8
-        # row-normalize
         row_sum = np.clip(ss_probs.sum(axis=1, keepdims=True), 1e-12, None)
         ss_probs = np.where(row_sum > 0, ss_probs / row_sum, ss_probs)
 
@@ -356,3 +302,37 @@ class ERerank:
         }
         with open(os.path.join(out_dir, "metadata.json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
+
+
+if __name__ == "__main__":  # optional CLI
+    import argparse
+
+    ap = argparse.ArgumentParser(description="E_rerank (fixed)")
+    ap.add_argument("--quantum_root", required=True)
+    ap.add_argument("--nsp_root", required=True)
+    ap.add_argument("--out_root", required=True)
+    ap.add_argument("--index_file", required=True)
+    ap.add_argument("--ss_mode", choices=["ss3","ss8"], default="ss3")
+    ap.add_argument("--dist", choices=["l2","kl","ce"], default="ce")
+    ap.add_argument("--angle_weight", choices=["uniform","rsa"], default="rsa")
+    ap.add_argument("--alpha", type=float, default=1.0)
+    ap.add_argument("--beta", type=float, default=1.0)
+    ap.add_argument("--gamma", type=float, default=1.0)
+    ap.add_argument("--max_candidates", type=int, default=5)
+
+    args = ap.parse_args()
+
+    r = ERerank(
+        quantum_root=args.quantum_root,
+        nsp_root=args.nsp_root,
+        out_root=args.out_root,
+        ss_mode=args.ss_mode,
+        dist=args.dist,
+        angle_weight=args.angle_weight,
+        alpha=args.alpha,
+        beta=args.beta,
+        gamma=args.gamma,
+        max_candidates=args.max_candidates,
+    )
+    r.run(index_file=args.index_file)
+
