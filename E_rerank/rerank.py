@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 
 try:
-    from fusion_reranker import FusionReRanker, Candidate
+    from .fusion_reranker import FusionReRanker, Candidate
 except Exception:  # pragma: no cover
     import sys
     sys.path.append(os.getcwd())
