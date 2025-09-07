@@ -4,6 +4,7 @@
 # @Email : yzhan135@kent.edu
 # @File:generate_priors.py
 
+
 """
 Generate secondary-structure priors from sequences using NN_layer.
 
