@@ -63,43 +63,42 @@ class ERerank:
         self.rng = np.random.default_rng(random_seed)
         os.makedirs(out_root, exist_ok=True)
 
+    def _read_index_pdbids(self, index_file: str):
+        """Read pdbids from index file robustly (no pandas, no guessing)."""
+        ids = []
+        with open(index_file, "r", encoding="utf-8") as f:
+            for line in f:
+                s = line.strip()
+                if not s:
+                    continue
+
+                if s.lower().replace("\ufeff", "") == "pdbid":
+                    continue
+                ids.append(s)
+        return ids
+
+    # 用下面这个 run() 替换原来的 run()
     def run(self, index_file: str) -> None:
-        """Process all PDBIDs listed in index_file.
+        """Process all PDBIDs listed in index_file."""
+        pdbids = self._read_index_pdbids(index_file)
 
-        index_file must be CSV/TSV with at least a column 'pdbid'.
-        """
-        idx = pd.read_csv(index_file, sep=None, engine="python")
-
-
-        if "pdbid" not in idx.columns:
-            first = idx.columns[0]
-            idx = idx.rename(columns={first: "pdbid"})
-
-        pdbids = (
-            idx["pdbid"]
-            .astype(str)
-            .apply(lambda s: s.strip())
-            .tolist()
-        )
-
-
-        sample = ", ".join(pdbids[:8])
-        print(f"[INFO] Loaded {len(pdbids)} pdbids from index. Sample: {sample}")
+        print(f"[INFO] Loaded {len(pdbids)} pdbids from index. Sample: {', '.join(pdbids[:8])}")
 
         valid = []
         for pid in pdbids:
-            q_dir = os.path.join(self.paths.quantum_root, pid)
-            nsp_tsv = os.path.join(self.paths.nsp_root, f"{pid}.tsv")
-            nsp_csv = os.path.join(self.paths.nsp_root, f"{pid}.csv")
+            pid_norm = pid.strip()
+            q_dir = os.path.join(self.paths.quantum_root, pid_norm)
+            nsp_tsv = os.path.join(self.paths.nsp_root, f"{pid_norm}.tsv")
+            nsp_csv = os.path.join(self.paths.nsp_root, f"{pid_norm}.csv")
 
             if not os.path.isdir(q_dir):
-                print(f"[WARN] Skip {pid}: quantum dir missing -> {q_dir}")
+                print(f"[WARN] Skip {pid_norm}: quantum dir missing -> {q_dir}")
                 continue
             if not (os.path.isfile(nsp_tsv) or os.path.isfile(nsp_csv)):
-                print(f"[WARN] Skip {pid}: NSP file missing -> {nsp_tsv} / {nsp_csv}")
+                print(f"[WARN] Skip {pid_norm}: NSP file missing -> {nsp_tsv} / {nsp_csv}")
                 continue
 
-            valid.append(pid)
+            valid.append(pid_norm)
 
         if not valid:
             raise RuntimeError("No valid pdbids after filtering. Check your data paths.")
