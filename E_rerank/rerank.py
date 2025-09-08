@@ -205,6 +205,7 @@ class ERerank:
         return vals
 
     def _read_nsp_priors(self, pdbid: str) -> Dict[str, np.ndarray]:
+        # 找到 tsv/csv
         tsv_path = None
         for cand in (f"{pdbid}.tsv", f"{pdbid}.csv"):
             p = os.path.join(self.paths.nsp_root, cand)
@@ -215,33 +216,70 @@ class ERerank:
             raise FileNotFoundError(f"NSP3 tsv/csv for {pdbid} not found under {self.paths.nsp_root}")
 
         df = pd.read_csv(tsv_path, sep=None, engine="python", header=None)
-        numeric = df.apply(pd.to_numeric, errors="coerce")
-        fin_mask = numeric.notna()
-        valid_cols = [i for i in range(numeric.shape[1]) if fin_mask.iloc[:, i].any()]
-        if len(valid_cols) < 2:
-            raise ValueError("Cannot locate numeric columns for phi/psi in NSP file")
-        psi_col = valid_cols[-1]
-        phi_col = valid_cols[-2]
+        num = df.apply(pd.to_numeric, errors="coerce")
 
-        ss8_start = 2
-        ss8 = numeric.iloc[:, ss8_start : ss8_start + 8].to_numpy(float)
-        ss3_start = ss8_start + 8
-        ss3 = numeric.iloc[:, ss3_start : ss3_start + 3].to_numpy(float)
+        # 优先按 NetSurfP 无表头标准布局（19 列）
+        if num.shape[1] >= 19:
+            ss8 = num.iloc[:, 2:10].to_numpy(float)  # 8 列
+            ss3 = num.iloc[:, 10:13].to_numpy(float)  # 3 列
+            rsa_col = 15
+            phi_col = 17
+            psi_col = 18
+            rsa = num.iloc[:, rsa_col].to_numpy(float)
+            phi = num.iloc[:, phi_col].to_numpy(float)
+            psi = num.iloc[:, psi_col].to_numpy(float)
+        else:
+            # 兜底：自动定位最后两列数值为 phi/psi，并从前向后找一个 [0,1] 的列做 RSA
+            valid_cols = [i for i in range(num.shape[1]) if num.iloc[:, i].notna().any()]
+            if len(valid_cols) < 2:
+                raise ValueError("Cannot locate numeric columns for phi/psi in NSP file")
+            psi_col = valid_cols[-1]
+            phi_col = valid_cols[-2]
 
-        rsa_col = phi_col - 1
-        rsa = numeric.iloc[:, rsa_col].to_numpy(float) if rsa_col >= 0 else None
-        phi = numeric.iloc[:, phi_col].to_numpy(float)
-        psi = numeric.iloc[:, psi_col].to_numpy(float)
+            # ss8/ss3 按常规位置抓；如果列数不够则用 0 填充
+            def safe_slice(a, b):
+                b = min(b, num.shape[1])
+                if a >= b:
+                    return np.zeros((len(num), max(0, b - a)))
+                return num.iloc[:, a:b].to_numpy(float)
 
+            ss8 = safe_slice(2, 10)
+            ss3 = safe_slice(10, 13)
+            # 找 RSA：phi 前向左找，取最后一个落在 [0,1] 的列
+            rsa = None
+            for c in range(phi_col - 1, 1, -1):
+                col = num.iloc[:, c].to_numpy(float)
+                finite = col[np.isfinite(col)]
+                if finite.size == 0:
+                    continue
+                if finite.min() >= -1e-6 and finite.max() <= 1.0 + 1e-6:
+                    rsa = col
+                    break
+            phi = num.iloc[:, phi_col].to_numpy(float)
+            psi = num.iloc[:, psi_col].to_numpy(float)
+
+        # 选择使用 ss3 还是 ss8
         ss_probs = ss3 if self.ss_mode == "ss3" else ss8
-        row_sum = np.clip(ss_probs.sum(axis=1, keepdims=True), 1e-12, None)
-        ss_probs = np.where(row_sum > 0, ss_probs / row_sum, ss_probs)
+        ss_probs = np.nan_to_num(ss_probs, nan=0.0, posinf=0.0, neginf=0.0)
+        row_sum = ss_probs.sum(axis=1, keepdims=True)
+        row_sum[row_sum == 0] = 1.0
+        ss_probs = ss_probs / row_sum
+
+        # 角度单位转弧度
+        phi = np.deg2rad(phi)
+        psi = np.deg2rad(psi)
+
+        # RSA 处理：裁剪到 [0,1]，NaN → 1.0（等价于“均匀权重”）
+        rsa_arr = None
+        if rsa is not None:
+            rsa_arr = np.asarray(rsa, float)
+            rsa_arr = np.where(np.isfinite(rsa_arr), np.clip(rsa_arr, 0.0, 1.0), 1.0)
 
         return {
             "ss_probs": ss_probs,
-            "phi": np.deg2rad(phi),
-            "psi": np.deg2rad(psi),
-            "rsa": None if rsa is None else np.clip(rsa, 0.0, 1.0),
+            "phi": phi,
+            "psi": psi,
+            "rsa": rsa_arr,
         }
 
     def _build_candidates(
