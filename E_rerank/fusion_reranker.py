@@ -115,6 +115,7 @@ class FusionReRanker:
         else:
             raise ValueError(f"Unknown dist: {self.dist}")
 
+
     def rerank(self, candidates: List[Candidate]) -> pd.DataFrame:
         if self.ss_probs is None or self.phi is None or self.psi is None:
             raise RuntimeError("Must call load_priors before rerank")
