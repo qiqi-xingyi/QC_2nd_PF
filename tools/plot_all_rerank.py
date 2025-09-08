@@ -135,7 +135,7 @@ def plot_one_pdb(pdb_dir: Path, out_fig_dir: Path) -> Path:
 
 def main():
     parser = argparse.ArgumentParser(description="Batch plot stacked bars from E_rerank/out/*/rerank.csv")
-    parser.add_argument("--in_root", type=str, default="E_rerank/out",
+    parser.add_argument("--in_root", type=str, default="../E_rerank/out",
                         help="Root folder containing per-pdb output subfolders")
     parser.add_argument("--out_fig_dir", type=str, default="figs_rerank",
                         help="Where to save all figures")
