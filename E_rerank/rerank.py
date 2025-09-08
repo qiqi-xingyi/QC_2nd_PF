@@ -64,24 +64,41 @@ class ERerank:
         os.makedirs(out_root, exist_ok=True)
 
     def run(self, index_file: str) -> None:
+        """Process all PDBIDs listed in index_file.
+
+        index_file must be CSV/TSV with at least a column 'pdbid'.
+        """
         idx = pd.read_csv(index_file, sep=None, engine="python")
+
+
         if "pdbid" not in idx.columns:
             first = idx.columns[0]
             idx = idx.rename(columns={first: "pdbid"})
 
-        pdbids = idx["pdbid"].astype(str).tolist()
+        pdbids = (
+            idx["pdbid"]
+            .astype(str)
+            .apply(lambda s: s.strip())
+            .tolist()
+        )
+
+
+        sample = ", ".join(pdbids[:8])
+        print(f"[INFO] Loaded {len(pdbids)} pdbids from index. Sample: {sample}")
 
         valid = []
         for pid in pdbids:
             q_dir = os.path.join(self.paths.quantum_root, pid)
             nsp_tsv = os.path.join(self.paths.nsp_root, f"{pid}.tsv")
             nsp_csv = os.path.join(self.paths.nsp_root, f"{pid}.csv")
+
             if not os.path.isdir(q_dir):
                 print(f"[WARN] Skip {pid}: quantum dir missing -> {q_dir}")
                 continue
             if not (os.path.isfile(nsp_tsv) or os.path.isfile(nsp_csv)):
                 print(f"[WARN] Skip {pid}: NSP file missing -> {nsp_tsv} / {nsp_csv}")
                 continue
+
             valid.append(pid)
 
         if not valid:
