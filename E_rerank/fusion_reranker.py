@@ -125,22 +125,46 @@ class FusionReRanker:
             D_ss = np.nan
             D_phi_psi = np.nan
 
-            # secondary structure distance (如果候选没有提供概率，跳过)
+            # ---------- D_ss（二级结构分布差异），若候选提供了 ss_probs_hat 才计算 ----------
             if c.ss_probs_hat is not None:
-                n = min(len(self.ss_probs), len(c.ss_probs_hat))
-                D_ss = np.mean(
-                    [self._ss_distance(self.ss_probs[i], c.ss_probs_hat[i]) for i in range(n)]
-                )
+                m = min(len(self.ss_probs), len(c.ss_probs_hat))
+                if m > 0:
+                    P = self.ss_probs[:m]
+                    Q = c.ss_probs_hat[:m]
+                    # 只在行向量都有限的残基上计算
+                    row_mask = np.isfinite(P).all(axis=1) & np.isfinite(Q).all(axis=1)
+                    if np.any(row_mask):
+                        idxs = np.where(row_mask)[0]
+                        D_ss = float(np.mean([self._ss_distance(P[i], Q[i]) for i in idxs]))
 
-            # angle difference (如果候选提供了 phi/psi)
-            if c.phi_hat is not None and len(c.phi_hat) > 0:
-                n = min(len(self.phi), len(c.phi_hat))
-                w = np.ones(n)
-                if self.angle_weight == "rsa" and self.rsa is not None:
-                    w = self.rsa[:n]
-                D_phi = [self._angle_diff(self.phi[i:i+1], c.phi_hat[i:i+1]) for i in range(n)]
-                D_psi = [self._angle_diff(self.psi[i:i+1], c.psi_hat[i:i+1]) for i in range(n)]
-                D_phi_psi = float(np.average(np.array(D_phi) + np.array(D_psi), weights=w))
+            # ---------- D_{φψ}（角度差），对 NaN 做掩码，只在有效位点上加权 ----------
+            if (c.phi_hat is not None and len(c.phi_hat) > 0 and
+                    c.psi_hat is not None and len(c.psi_hat) > 0):
+                n = min(len(self.phi), len(c.phi_hat), len(self.psi), len(c.psi_hat))
+                if n > 0:
+                    phi_p = self.phi[:n]
+                    psi_p = self.psi[:n]
+                    phi_c = c.phi_hat[:n]
+                    psi_c = c.psi_hat[:n]
+
+                    mask = (np.isfinite(phi_p) & np.isfinite(psi_p) &
+                            np.isfinite(phi_c) & np.isfinite(psi_c))
+                    if np.any(mask):
+                        # 角度环形差：angle(exp(iΔ)) ∈ [-π, π]
+                        dphi = np.angle(np.exp(1j * (phi_p[mask] - phi_c[mask]))) ** 2
+                        dpsi = np.angle(np.exp(1j * (psi_p[mask] - psi_c[mask]))) ** 2
+                        diff = dphi + dpsi  # 每个有效残基的误差
+
+                        if self.angle_weight == "rsa" and self.rsa is not None:
+                            w = np.clip(self.rsa[:n][mask], 0.0, 1.0)
+                        else:
+                            w = np.ones(diff.shape, dtype=float)
+
+                        # 避免全 0 权重
+                        if np.sum(w) <= 1e-12:
+                            w = np.ones_like(w, dtype=float)
+
+                        D_phi_psi = float(np.average(diff, weights=w))
 
             rows.append({
                 "cid": c.cid,
@@ -151,21 +175,28 @@ class FusionReRanker:
 
         df = pd.DataFrame(rows)
 
-        # normalization
+        # ---------- 列内归一化（忽略 NaN） ----------
         if self.normalize_terms:
             for col in ["E_q", "D_ss", "D_phi_psi"]:
-                if df[col].notna().any():
+                if col in df.columns:
                     v = df[col].astype(float).to_numpy()
-                    vmin, vmax = np.nanmin(v), np.nanmax(v)
-                    if vmax > vmin:
-                        df[col] = (v - vmin) / (vmax - vmin)
+                    finite = np.isfinite(v)
+                    if np.any(finite):
+                        vmin = np.min(v[finite]);
+                        vmax = np.max(v[finite])
+                        if vmax > vmin:
+                            v_norm = (v - vmin) / (vmax - vmin)
+                        else:
+                            v_norm = np.zeros_like(v)
+                        df[col] = v_norm
                     else:
-                        df[col] = 0.0
+                        df[col] = v  # 全 NaN 列保持不变
 
         df["Score"] = (
-            self.alpha * df["E_q"].fillna(0)
-            + self.beta * df["D_ss"].fillna(0)
-            + self.gamma * df["D_phi_psi"].fillna(0)
+                self.alpha * df["E_q"].fillna(0.0) +
+                self.beta * df["D_ss"].fillna(0.0) +
+                self.gamma * df["D_phi_psi"].fillna(0.0)
         )
 
         return df.sort_values("Score").reset_index(drop=True)
+
