@@ -5,17 +5,7 @@
 # @File:fusion_reranker.py
 
 from __future__ import annotations
-"""
-fusion_reranker.py
 
-Implements Candidate dataclass and FusionReRanker class.
-
-- Candidate: 包装单个候选结构的信息（量子能量、角度、SS 概率等）。
-- FusionReRanker: 结合 NetSurfP 预测的先验 (SS, φ/ψ, RSA) 与量子能量 E_q，
-  计算融合打分并重排候选结构。
-
-Author: Yuqi Zhang (with ChatGPT)
-"""
 
 from dataclasses import dataclass
 from typing import Dict, List, Optional
