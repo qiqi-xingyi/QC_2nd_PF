@@ -66,8 +66,28 @@ class ERerank:
     def run(self, index_file: str) -> None:
         idx = pd.read_csv(index_file, sep=None, engine="python")
         if "pdbid" not in idx.columns:
-            raise ValueError("index_file must contain column 'pdbid'")
-        for pdbid in idx["pdbid"].astype(str):
+            first = idx.columns[0]
+            idx = idx.rename(columns={first: "pdbid"})
+
+        pdbids = idx["pdbid"].astype(str).tolist()
+
+        valid = []
+        for pid in pdbids:
+            q_dir = os.path.join(self.paths.quantum_root, pid)
+            nsp_tsv = os.path.join(self.paths.nsp_root, f"{pid}.tsv")
+            nsp_csv = os.path.join(self.paths.nsp_root, f"{pid}.csv")
+            if not os.path.isdir(q_dir):
+                print(f"[WARN] Skip {pid}: quantum dir missing -> {q_dir}")
+                continue
+            if not (os.path.isfile(nsp_tsv) or os.path.isfile(nsp_csv)):
+                print(f"[WARN] Skip {pid}: NSP file missing -> {nsp_tsv} / {nsp_csv}")
+                continue
+            valid.append(pid)
+
+        if not valid:
+            raise RuntimeError("No valid pdbids after filtering. Check your data paths.")
+
+        for pdbid in valid:
             self._process_one(pdbid)
 
     def _process_one(self, pdbid: str) -> None:
