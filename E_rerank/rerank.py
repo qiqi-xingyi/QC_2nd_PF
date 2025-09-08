@@ -1,27 +1,34 @@
 # --*-- coding:utf-8 --*--
-# @time: 9/7/25 19:14
+# @time: 9/7/25
 # @Author : Yuqi Zhang
 # @Email  : yzhan135@kent.edu
 # @File   : rerank.py
 
 """
-E_rerank.rerank (fixed & hardened):
+E_rerank.rerank (final, with SS3/SS8 fusion):
 
-- Robust energy parser (supports lines like: "Rank 1: 6592.7348").
-- Candidate discovery accepts files with or without the .xyz extension.
-- Explicit NetSurfP (NSP) TSV layout handling (19 columns, headerless).
-- Safe fallbacks:
-  * If angles_<pdbid>.csv is missing or malformed, compute "virtual" phi/psi
-    directly from C-alpha-only xyz for each candidate (top_1..top_5).
-  * If RSA cannot be located, fall back to uniform weights (=1.0) inside FusionReRanker.
+What this module does
+---------------------
+- Robustly reads quantum candidates & energies (supports "Rank i: <float>" text).
+- Reads NetSurfP priors (headerless TSV/CSV, 19-column standard layout).
+- For each candidate (top_1..top_N):
+    * Load per-structure angles from angles_<pdbid>.csv if present (degrees).
+    * Otherwise, compute "virtual" phi/psi (radians) from C-alpha-only xyz.
+    * Derive candidate SS3/SS8 probabilities from angles (Ramachandran kernels).
+- Calls FusionReRanker to combine:
+    * quantum energy (E_q)
+    * secondary-structure distance (D_ss)
+    * angle difference (D_{phi,psi}), optionally RSA-weighted
+- Writes:
+    * rerank.csv (score breakdown)
+    * metadata.json (parameters)
+    * copies & renames xyz files by new ranking order
 
-This file orchestrates:
-- load index -> iterate pdbid
-- read quantum candidates & energies
-- read NSP priors (SS, RSA, phi, psi)
-- build candidates with per-structure angles
-- rerank using FusionReRanker
-- copy & rename xyz, save rerank.csv + metadata.json
+Notes
+-----
+- RSA column in NSP is clipped to [0,1]; missing/NaN -> uniform weights (=1.0).
+- Edge residues have undefined dihedrals with C-alpha-only xyz (NaN by definition);
+  FusionReRanker masks them out when averaging.
 """
 
 from __future__ import annotations
@@ -60,9 +67,9 @@ class ERerank:
         quantum_root: str,
         nsp_root: str,
         out_root: str,
-        ss_mode: str = "ss3",
-        dist: str = "ce",
-        angle_weight: str = "rsa",
+        ss_mode: str = "ss3",          # or "ss8"
+        dist: str = "ce",               # "ce" | "kl" | "l2"
+        angle_weight: str = "rsa",      # "rsa" | "uniform"
         normalize_terms: bool = True,
         alpha: float = 1.0,
         beta: float = 1.0,
@@ -70,9 +77,6 @@ class ERerank:
         max_candidates: int = 5,
         random_seed: int = 0,
     ) -> None:
-        """
-        Parameters reflect the fusion scoring options; they are passed through to FusionReRanker.
-        """
         self.paths = Paths(quantum_root, nsp_root, out_root)
         self.ss_mode = ss_mode
         self.dist = dist
@@ -137,7 +141,7 @@ class ERerank:
         Process a single pdbid:
         - read quantum candidates and energies
         - read NSP priors
-        - build candidate list (ensure each candidate carries phi/psi)
+        - build candidate list (ensure each candidate carries phi/psi and ss_probs_hat)
         - rerank and materialize outputs
         """
         q_dir = os.path.join(self.paths.quantum_root, pdbid)
@@ -376,6 +380,68 @@ class ERerank:
 
         return phi, psi
 
+    # ---------------------------- Angles -> SS3/SS8 probabilities ----------------------------
+    def _angles_to_ss_probs(self, phi: np.ndarray, psi: np.ndarray, mode: str = "ss3") -> np.ndarray:
+        """
+        Map per-residue (phi, psi) to a secondary-structure probability vector.
+
+        Step 1: compute SS3 probs (H/E/C) via Gaussian kernels centered on typical
+                Ramachandran regions; sigma can be tuned.
+        Step 2: if mode == 'ss8', expand SS3 to SS8 with a fixed heuristic mapping.
+
+        Returns
+        -------
+        probs : (L, K) ndarray
+            K=3 for ss3, K=8 for ss8
+        """
+        # centers in degrees: (phi, psi)
+        centers = {
+            "H": (-60.0, -45.0),   # alpha-helix basin
+            "E": (-120.0, 130.0),  # beta basin
+            "C": (0.0, 0.0),       # coil/other (broad catch-all)
+        }
+        sigma = 40.0  # std in degrees for both phi and psi
+        phi_d = np.rad2deg(phi)
+        psi_d = np.rad2deg(psi)
+
+        def circ_dist(a, b):
+            """circular distance in degrees, in [0, 180]"""
+            d = abs(a - b) % 360.0
+            return min(d, 360.0 - d)
+
+        L = len(phi_d)
+        ss3 = np.zeros((L, 3), dtype=float)
+        for i in range(L):
+            if not (np.isfinite(phi_d[i]) and np.isfinite(psi_d[i])):
+                ss3[i] = [1/3, 1/3, 1/3]
+                continue
+            scores = []
+            for key in ("H", "E", "C"):
+                mu_phi, mu_psi = centers[key]
+                dphi = circ_dist(phi_d[i], mu_phi)
+                dpsi = circ_dist(psi_d[i], mu_psi)
+                s = math.exp(-0.5 * ((dphi/sigma)**2 + (dpsi/sigma)**2))
+                scores.append(s)
+            scores = np.asarray(scores)
+            scores = scores / (scores.sum() + 1e-12)
+            ss3[i] = scores  # order: H, E, C
+
+        if mode == "ss3":
+            return ss3
+
+        # ss8 expansion (heuristic): distribute H into H/G/I; E into E/B; C into T/S/L.
+        # Order for ss8 probs here: [H, G, I, E, B, T, S, L]
+        ss8 = np.zeros((L, 8), dtype=float)
+        for i in range(L):
+            pH, pE, pC = ss3[i]
+            h_split = np.array([0.8, 0.1, 0.1])  # H->(H,G,I)
+            e_split = np.array([0.9, 0.1])       # E->(E,B)
+            c_split = np.array([1/3, 1/3, 1/3])  # C->(T,S,L)
+            ss8[i, 0:3] = pH * h_split
+            ss8[i, 3:5] = pE * e_split
+            ss8[i, 5:8] = pC * c_split
+        return ss8
+
     # ---------------------------- Build candidates ----------------------------
     def _build_candidates(
         self,
@@ -387,6 +453,7 @@ class ERerank:
         """
         Build Candidate objects. If angles_<pdbid>.csv exists, try to use it.
         Otherwise (or if malformed) compute virtual angles from each xyz as fallback.
+        In both cases, derive candidate SS probs (SS3/SS8) from angles to enable D_ss.
         """
         ang_path = os.path.join(q_dir, f"angles_{pdbid}.csv")
         angles_df: Optional[pd.DataFrame] = None
@@ -402,7 +469,7 @@ class ERerank:
             phi_hat: Optional[np.ndarray] = None
             psi_hat: Optional[np.ndarray] = None
 
-            # 1) Try angles_<pdbid>.csv first
+            # 1) Try angles_<pdbid>.csv first (degrees)
             if angles_df is not None:
                 row = angles_df.loc[angles_df["cid"] == cid]
                 if len(row) == 1:
@@ -410,7 +477,6 @@ class ERerank:
                     phi_cols = [c for c in angles_df.columns if c.startswith("phi_hat_")]
                     psi_cols = [c for c in angles_df.columns if c.startswith("psi_hat_")]
                     if phi_cols and psi_cols:
-                        # angles_<pdbid>.csv provides degrees; convert to radians
                         phi_hat = np.deg2rad(row[phi_cols].to_numpy(float))
                         psi_hat = np.deg2rad(row[psi_cols].to_numpy(float))
 
@@ -418,14 +484,15 @@ class ERerank:
             if phi_hat is None or psi_hat is None or len(phi_hat) == 0 or len(psi_hat) == 0:
                 phi_hat, psi_hat = self._virtual_angles_from_xyz(cand_map[cid])
 
-            # NOTE: We keep ss_probs_hat=None for now; you may later add a mapper
-            #       from angles -> SS3 probs if you want D_ss to engage.
+            # 3) Derive candidate SS probs from angles (Ramachandran-based)
+            ss_hat = self._angles_to_ss_probs(phi_hat, psi_hat, mode=self.ss_mode)
+
             cands.append(Candidate(
                 cid=cid,
                 E_q=E_q,
                 phi_hat=phi_hat,
                 psi_hat=psi_hat,
-                ss_probs_hat=None,
+                ss_probs_hat=ss_hat,   # <-- enable D_ss
                 unit="rad",
                 meta={"xyz_path": cand_map[cid]},
             ))
@@ -495,6 +562,7 @@ class ERerank:
             "notes": [
                 "If candidate angles are absent, virtual phi/psi are computed from C-alpha-only xyz.",
                 "RSA is used to weight angle differences when available; missing RSA -> uniform weights.",
+                "Candidate SS3/SS8 probabilities are derived from angles via Ramachandran kernels.",
             ],
         }
         with open(os.path.join(out_dir, "metadata.json"), "w", encoding="utf-8") as f:
@@ -505,7 +573,7 @@ class ERerank:
 if __name__ == "__main__":
     import argparse
 
-    ap = argparse.ArgumentParser(description="E_rerank (fixed & hardened)")
+    ap = argparse.ArgumentParser(description="E_rerank (final, with SS3/SS8 fusion)")
     ap.add_argument("--quantum_root", required=True)
     ap.add_argument("--nsp_root", required=True)
     ap.add_argument("--out_root", required=True)
