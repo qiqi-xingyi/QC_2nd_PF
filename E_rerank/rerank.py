@@ -31,6 +31,7 @@ Notes
   FusionReRanker masks them out when averaging.
 """
 
+
 from __future__ import annotations
 import os
 import json
