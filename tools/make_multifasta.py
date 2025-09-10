@@ -6,7 +6,7 @@
 
 """
 Build a multi-FASTA from:
-  - data/seqs_len10.csv (columns: id,sequence)
+  - data/seqs_len10.csv (columns: id,sequence) using Python csv (robust to BOM/encoding)
   - data/seqs_len10/*.fasta (fallback for ids not in CSV)
 Output: data/seqs_len10_all.fasta
 Rules:
@@ -15,7 +15,7 @@ Rules:
 """
 
 from pathlib import Path
-import pandas as pd
+import csv
 
 AA = set("ACDEFGHIKLMNPQRSTVWY")
 
@@ -27,12 +27,22 @@ def read_csv(csv_path: Path) -> dict:
     records = {}
     if not csv_path.exists():
         return records
-    df = pd.read_csv(csv_path)
-    for _, r in df.iterrows():
-        sid = str(r["id"]).strip()
-        seq = clean_seq(str(r["sequence"]))
-        if sid and seq:
-            records[sid] = seq
+    # utf-8-sig removes BOM if present; newline="" for csv module correctness
+    with csv_path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        # normalize header variants like "ID" / "Sequence"
+        headers = {h.lower(): h for h in (reader.fieldnames or [])}
+        id_key = headers.get("id")
+        seq_key = headers.get("sequence")
+        if not id_key or not seq_key:
+            raise RuntimeError(
+                f"CSV header must contain 'id,sequence'. Found: {reader.fieldnames}"
+            )
+        for row in reader:
+            sid = str(row[id_key]).strip()
+            seq = clean_seq(str(row[seq_key]))
+            if sid and seq:
+                records[sid] = seq
     return records
 
 def read_single_fastas(fasta_dir: Path) -> dict:
@@ -40,7 +50,7 @@ def read_single_fastas(fasta_dir: Path) -> dict:
     if not fasta_dir.exists():
         return records
     for fa in sorted(fasta_dir.glob("*.fasta")):
-        text = fa.read_text().strip()
+        text = fa.read_text(encoding="utf-8", errors="ignore").strip()
         lines = [ln for ln in text.splitlines() if ln.strip()]
         if not lines or not lines[0].startswith(">"):
             continue
@@ -52,7 +62,7 @@ def read_single_fastas(fasta_dir: Path) -> dict:
 
 def write_multifasta(records: dict, out_fa: Path) -> int:
     out_fa.parent.mkdir(parents=True, exist_ok=True)
-    with out_fa.open("w") as f:
+    with out_fa.open("w", encoding="utf-8") as f:
         for sid, seq in records.items():
             f.write(f">{sid}\n{seq}\n")
     return len(records)
@@ -63,13 +73,22 @@ def main():
     fasta_dir = proj / "data" / "seqs_len10"
     out_fa = proj / "data" / "seqs_len10_all.fasta"
 
+    # 1) CSV first (priority)
     records = read_csv(csv_path)
+
+    # 2) FASTA dir as fallback for ids not in CSV
     fallback = read_single_fastas(fasta_dir)
-    # CSV has priority; add only ids not present
     for sid, seq in fallback.items():
         if sid not in records:
             records[sid] = seq
 
+    if not records:
+        raise RuntimeError(
+            "No sequences collected from CSV or FASTA directory. "
+            f"Checked: {csv_path} and {fasta_dir}"
+        )
+
+    # 3) Write multi-FASTA
     n = write_multifasta(records, out_fa)
     print(f"[make_multifasta] wrote {n} sequences to {out_fa}")
 
