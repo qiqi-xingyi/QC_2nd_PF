@@ -4,8 +4,6 @@
 # @Email : yzhan135@kent.edu
 # @File:make_multifasta.py
 
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 Build a multi-FASTA from:
   - data/seqs_len10.csv (columns: id,sequence)
