@@ -50,7 +50,7 @@ class OnlineModelClient:
     saving the raw outputs locally, and returning an index.
 
     IMPORTANT:
-      - Use AppID 'DTU/NetSurfP-3' (NOT 'DTU/NetSurfP-3.0').
+      - Use AppID 'DTU/NetSurfP-3' (NOT 'DTU/NSP3').
       - The app expects CLI args: -i <input_fasta>  -o <output_dir>.
         Pass them as a SINGLE CLI STRING via `app.cli(args="...")`.
     """

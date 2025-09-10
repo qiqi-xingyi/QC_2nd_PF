@@ -7,7 +7,7 @@
 """
 Probe a BioLib app's CLI outputs and save logs locally.
 
-- Tries both "DTU/NetSurfP-3.0" and "DTU/NetSurfP-3"
+- Tries both "DTU/NSP3" and "DTU/NetSurfP-3"
 - For each app id, runs CLI with:
     1) --help
     2) -h
@@ -22,7 +22,7 @@ from pathlib import Path
 import biolib
 import traceback
 
-APP_IDS = ["DTU/NetSurfP-3.0", "DTU/NetSurfP-3"]  # try both variants
+APP_IDS = ["DTU/NSP3", "DTU/NetSurfP-3"]  # try both variants
 MODES = [
     ("help", "--help"),
     ("h", "-h"),

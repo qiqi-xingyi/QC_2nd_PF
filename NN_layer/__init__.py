@@ -11,7 +11,7 @@ This package provides the neural-network prior interface for the hybrid AI–Qua
 It contains three main modules:
 
 - sequence_reader: Read and standardize protein sequences from FASTA, produce Dataset.
-- online_model_client: Call NetSurfP-3.0 via BioLib to generate raw predictions.
+- online_model_client: Call NSP3 via BioLib to generate raw predictions.
 - prior_postprocessor: Convert raw predictions into a unified Prior object (P_ss, φ/ψ, beta_pairs).
 
 Typical usage:
