@@ -8,10 +8,11 @@
 # -*- coding: utf-8 -*-
 
 """
-RMSD visualization and statistics for four methods across multiple proteins.
+RMSD visualization with consistent colors and full heatmap labels.
 
-Input:
+Input CSV (required):
   results/summary_rmsd.csv  with columns: pdbid,af3,colab,quantum,hybrid
+
 Outputs (under results/rmsd_figures/):
   - fig1_violin_jitter.(pdf|svg)
   - fig2_ecdf.(pdf|svg)
@@ -23,6 +24,7 @@ Outputs (under results/rmsd_figures/):
   - metrics_coverage.csv
   - metrics_ranks_wins.csv
   - metrics_improvements_vs_hybrid.csv
+  - metrics_tests.csv (if scipy is available)
   - README.txt
 """
 
@@ -32,31 +34,45 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-# Try to import scipy for Wilcoxon; handle absence gracefully.
+# Optional: Wilcoxon test
 try:
     from scipy.stats import wilcoxon
     SCIPY_OK = True
 except Exception:
     SCIPY_OK = False
 
-# ---------- Config ----------
+# ---------------- Config ----------------
 CSV_PATH = "results/summary_rmsd.csv"
 OUT_DIR = "results/rmsd_figures"
+
 METHODS = ["af3", "colab", "quantum", "hybrid"]
 DISPLAY_NAMES = {"af3": "AF3", "colab": "ColabFold", "quantum": "Quantum", "hybrid": "Hybrid"}
-THRESHOLDS = (3.0, 4.0, 5.0)  # Å thresholds for coverage
+
+# Consistent colors for each method (except heatmap)
+COLORS = {
+    "AF3": "#1f77b4",       # blue
+    "ColabFold": "#ff7f0e", # orange
+    "Quantum": "#2ca02c",   # green
+    "Hybrid": "#d62728",    # red
+}
+
+THRESHOLDS = (3.0, 4.0, 5.0)  # Å for ECDF coverage report
 RANDOM_SEED = 42
+DPI = 300  # save resolution
 
 
+# ---------------- IO helpers ----------------
 def ensure_io() -> pd.DataFrame:
     if not os.path.exists(CSV_PATH):
         sys.exit(f"[ERROR] CSV not found: {CSV_PATH}")
     os.makedirs(OUT_DIR, exist_ok=True)
+
     df = pd.read_csv(CSV_PATH)
     needed = ["pdbid"] + METHODS
     missing = [c for c in needed if c not in df.columns]
     if missing:
         sys.exit(f"[ERROR] Missing required columns: {missing}")
+
     df = df[needed].dropna()
     if df.empty:
         sys.exit("[ERROR] No data after dropping NaNs.")
@@ -65,9 +81,10 @@ def ensure_io() -> pd.DataFrame:
 
 def savefig(base: str):
     for ext in ("pdf", "svg"):
-        plt.savefig(os.path.join(OUT_DIR, f"{base}.{ext}"), bbox_inches="tight")
+        plt.savefig(os.path.join(OUT_DIR, f"{base}.{ext}"), bbox_inches="tight", dpi=DPI)
 
 
+# ---------------- Stats helpers ----------------
 def ecdf_values(arr: np.ndarray):
     y = np.sort(arr)
     x_step = np.concatenate(([y[0]], y))
@@ -79,24 +96,25 @@ def coverage(arr: np.ndarray, thr: float) -> float:
     return float((arr <= thr).mean())
 
 
+# ---------------- Figures ----------------
 def figure_violin_jitter(df: pd.DataFrame):
-    plt.figure(figsize=(6.4, 3.8))
-    data = [df[m].to_numpy(dtype=float) for m in METHODS]
+    plt.figure(figsize=(6.8, 4.0))
+    rng = np.random.default_rng(RANDOM_SEED)
 
+    # Base violins (neutral), then overlay colored medians/IQR/jitter for each method
+    data = [df[m].to_numpy(dtype=float) for m in METHODS]
     plt.violinplot(data, showmeans=False, showmedians=False, showextrema=False)
 
-    # Quartiles and median markers
     for i, m in enumerate(METHODS, start=1):
+        name = DISPLAY_NAMES[m]
+        color = COLORS[name]
         y = df[m].to_numpy(dtype=float)
         q1, med, q3 = np.percentile(y, [25, 50, 75])
-        plt.scatter([i], [med], marker="o", zorder=3)
-        plt.vlines(i, q1, q3, linewidth=3)
-
-    # Jittered points
-    rng = np.random.default_rng(RANDOM_SEED)
-    for i, y in enumerate(data, start=1):
+        plt.scatter([i], [med], marker="o", zorder=3, s=22, edgecolor="none", c=color)
+        plt.vlines(i, q1, q3, linewidth=3, colors=color)
+        # jitter
         xj = i + (rng.random(len(y)) - 0.5) * 0.22
-        plt.plot(xj, y, linestyle="none", marker=".", alpha=0.35)
+        plt.plot(xj, y, linestyle="none", marker=".", alpha=0.35, c=color)
 
     plt.xticks(range(1, len(METHODS) + 1), [DISPLAY_NAMES[m] for m in METHODS])
     plt.ylabel("RMSD (Å)")
@@ -107,12 +125,16 @@ def figure_violin_jitter(df: pd.DataFrame):
 
 
 def figure_ecdf(df: pd.DataFrame):
-    plt.figure(figsize=(6.4, 3.8))
+    plt.figure(figsize=(6.8, 4.0))
     for m in METHODS:
-        x_step, y_step = ecdf_values(df[m].to_numpy(dtype=float))
-        plt.step(x_step, y_step, where="post", label=DISPLAY_NAMES[m])
+        arr = df[m].to_numpy(dtype=float)
+        x_step, y_step = ecdf_values(arr)
+        name = DISPLAY_NAMES[m]
+        plt.step(x_step, y_step, where="post", label=name, c=COLORS[name], linewidth=2.0)
+
     for thr in THRESHOLDS:
         plt.axvline(thr, linestyle="--", alpha=0.2)
+
     plt.xlabel("RMSD (Å)")
     plt.ylabel("Proportion ≤ x")
     plt.title("ECDF of RMSD (higher curve is better)")
@@ -123,19 +145,22 @@ def figure_ecdf(df: pd.DataFrame):
 
 
 def figure_improvement_hist(df: pd.DataFrame) -> pd.DataFrame:
-    plt.figure(figsize=(6.4, 3.8))
+    plt.figure(figsize=(6.8, 4.0))
     bins = 20
     rows = []
     for m in ["af3", "colab", "quantum"]:
+        name = DISPLAY_NAMES[m]
         delta = df[m].to_numpy(dtype=float) - df["hybrid"].to_numpy(dtype=float)
-        plt.hist(delta, bins=bins, histtype="step", label=f"{DISPLAY_NAMES[m]} − Hybrid")
+        plt.hist(delta, bins=bins, histtype="step", label=f"{name} − Hybrid",
+                 linewidth=2.0, color=COLORS[name])
         rows.append({
-            "method": DISPLAY_NAMES[m],
+            "method": name,
             "win_rate_vs_hybrid": float((delta > 0).mean()),
             "mean_delta": float(delta.mean()),
             "median_delta": float(np.median(delta))
         })
-    plt.axvline(0.0, linestyle="--", alpha=0.4)
+
+    plt.axvline(0.0, linestyle="--", alpha=0.5)
     plt.xlabel("RMSD difference (method − Hybrid)  [Å]")
     plt.ylabel("Count")
     plt.title("Per-sample improvements of Hybrid (right = worse than Hybrid)")
@@ -146,16 +171,17 @@ def figure_improvement_hist(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def figure_avg_rank_and_wins(df: pd.DataFrame) -> (pd.DataFrame, pd.DataFrame):
+def figure_avg_rank_and_wins(df: pd.DataFrame) -> (np.ndarray, pd.DataFrame):
     vals = df[METHODS].to_numpy(dtype=float)
     ranks = np.argsort(np.argsort(vals, axis=1), axis=1) + 1  # ascending rank
     avg_rank = ranks.mean(axis=0)
     row_mins = vals.min(axis=1, keepdims=True)
     win_counts = (vals == row_mins).sum(axis=0)
 
-    # Average rank bar
-    plt.figure(figsize=(5.4, 3.2))
-    plt.bar(range(len(METHODS)), avg_rank)
+    # Average rank bar (colored bars)
+    plt.figure(figsize=(5.8, 3.4))
+    colors = [COLORS[DISPLAY_NAMES[m]] for m in METHODS]
+    plt.bar(range(len(METHODS)), avg_rank, color=colors)
     plt.xticks(range(len(METHODS)), [DISPLAY_NAMES[m] for m in METHODS])
     plt.ylabel("Average rank (lower is better)")
     plt.title("Average rank across proteins")
@@ -163,9 +189,9 @@ def figure_avg_rank_and_wins(df: pd.DataFrame) -> (pd.DataFrame, pd.DataFrame):
     savefig("fig4a_avg_rank")
     plt.close()
 
-    # Win counts bar
-    plt.figure(figsize=(5.4, 3.2))
-    plt.bar(range(len(METHODS)), win_counts)
+    # Win counts bar (colored bars)
+    plt.figure(figsize=(5.8, 3.4))
+    plt.bar(range(len(METHODS)), win_counts, color=colors)
     plt.xticks(range(len(METHODS)), [DISPLAY_NAMES[m] for m in METHODS])
     plt.ylabel("#Proteins with best (lowest) RMSD")
     plt.title("Win count (ties counted for all winners)")
@@ -182,27 +208,40 @@ def figure_avg_rank_and_wins(df: pd.DataFrame) -> (pd.DataFrame, pd.DataFrame):
 
 
 def figure_rank_heatmap(df: pd.DataFrame, ranks: np.ndarray):
-    order = np.argsort(df["hybrid"].to_numpy(dtype=float))  # best Hybrid first
+    # Sort by Hybrid ascending
+    order = np.argsort(df["hybrid"].to_numpy(dtype=float))
     rank_mat = ranks[order, :]
+    labels = df["pdbid"].to_numpy()[order]
 
-    plt.figure(figsize=(6.2, 6.2))
-    plt.imshow(rank_mat, aspect="auto", interpolation="nearest")
-    plt.colorbar(label="Rank (1=best)")
-    # show ~15 y-ticks max
-    n = len(order)
-    step = max(1, n // 15)
-    idxs = list(range(0, n, step))
-    plt.yticks(idxs, df["pdbid"].to_numpy()[order][idxs])
-    plt.xticks(range(len(METHODS)), [DISPLAY_NAMES[m] for m in METHODS])
-    plt.title("Per-protein rank heatmap (sorted by Hybrid)")
+    # Dynamic height so all labels fit; limit to a reasonable max height
+    n = len(labels)
+    height = min(max(6.0, 0.18 * n), 18.0)  # inches
+    fig = plt.figure(figsize=(6.6, height))
+    ax = plt.gca()
+
+    im = ax.imshow(rank_mat, aspect="auto", interpolation="nearest")
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label("Rank (1=best)")
+
+    # Show all labels with small font; enlarge left margin to avoid truncation
+    ax.set_yticks(range(n))
+    ax.set_yticklabels(labels, fontsize=6)
+    ax.set_xticks(range(len(METHODS)))
+    ax.set_xticklabels([DISPLAY_NAMES[m] for m in METHODS], fontsize=9)
+
+    ax.set_title("Per-protein rank heatmap (sorted by Hybrid)")
+    # Increase left margin to fit labels
+    plt.subplots_adjust(left=0.28, right=0.96, top=0.95, bottom=0.05)
+
     savefig("fig5_rank_heatmap")
-    plt.close()
+    plt.close(fig)
 
 
+# ---------------- Summaries & tests ----------------
 def compute_summaries_and_tests(df: pd.DataFrame) -> dict:
     out = {}
 
-    # Aggregate stats
+    # Aggregate stats & coverage
     agg_rows = []
     cov_rows = []
     for m in METHODS:
@@ -224,7 +263,7 @@ def compute_summaries_and_tests(df: pd.DataFrame) -> dict:
     out["aggregate"] = pd.DataFrame(agg_rows)
     out["coverage"] = pd.DataFrame(cov_rows)
 
-    # Wilcoxon tests (paired): H1: Hybrid < other
+    # Pairwise Wilcoxon (H1: Hybrid < other)
     tests = []
     if SCIPY_OK:
         base = "hybrid"
@@ -294,15 +333,16 @@ def write_readme(df: pd.DataFrame, tables: dict, rank_df: pd.DataFrame, improve_
         f.write("\n".join(lines))
 
 
+# ---------------- Main ----------------
 def main():
     df = ensure_io()
 
-    # Figures
+    # Figures (with consistent colors)
     figure_violin_jitter(df)
     figure_ecdf(df)
     improve_df = figure_improvement_hist(df)
     ranks, rank_df = figure_avg_rank_and_wins(df)
-    figure_rank_heatmap(df, ranks)
+    figure_rank_heatmap(df, ranks)  # full y-axis labels with small font
 
     # Tables & tests
     tables = compute_summaries_and_tests(df)
@@ -316,3 +356,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
