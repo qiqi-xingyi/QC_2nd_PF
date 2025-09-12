@@ -293,5 +293,15 @@ def main():
     print(f"Saved: {f5}")
 
 if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) == 1:
+        sys.argv += [
+            "--info", "data/data_set/info.txt",
+            "--pdbbind-root", "data/Pdbbind",
+            "--quantum-root", "data/Quantum_original_data",
+            "--out-dir", "results/quantum",
+            "--mode", "both"
+        ]
     main()
 
