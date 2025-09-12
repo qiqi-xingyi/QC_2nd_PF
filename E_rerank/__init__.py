@@ -64,7 +64,7 @@ def run(
 if __name__ == "__main__":  # pragma: no cover
     import argparse
 
-    ap = argparse.ArgumentParser(description="E_rerank: fuse NSP priors and quantum energies to re-rank candidates")
+    ap = argparse.ArgumentParser(description="E_rerank: fuse NSP priors and quantum_rmsd energies to re-rank candidates")
     ap.add_argument("--quantum_root", required=True)
     ap.add_argument("--nsp_root", required=True)
     ap.add_argument("--out_root", required=True)

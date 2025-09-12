@@ -27,7 +27,7 @@ class Candidate:
 
 class FusionReRanker:
     """
-    Combines quantum energy and AI priors for re-ranking.
+    Combines quantum_rmsd energy and AI priors for re-ranking.
 
     Parameters
     ----------

@@ -5,7 +5,7 @@
 # @File:rmsd_quantum_original.py.py
 
 """
-Compute RMSD for pure-quantum candidates (top1 & top1..top5) against PDBbind pockets.
+Compute RMSD for pure-quantum_rmsd candidates (top1 & top1..top5) against PDBbind pockets.
 
 Assumptions
 - Predicted xyz are residue-level points: lines like "<AA> x y z".
@@ -263,7 +263,7 @@ def main():
     ap = argparse.ArgumentParser(description="RMSD for Quantum-original (top1 & top1..top5)")
     ap.add_argument("--info", required=True)
     ap.add_argument("--pdbbind-root", required=True)
-    ap.add_argument("--quantum-root", required=True)
+    ap.add_argument("--quantum_rmsd-root", required=True)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--mode", choices=["rigid", "scale", "both"], default="rigid",
                     help="Which RMSD to compute")
@@ -299,8 +299,8 @@ if __name__ == "__main__":
         sys.argv += [
             "--info", "data/data_set/info.txt",
             "--pdbbind-root", "data/Pdbbind",
-            "--quantum-root", "data/Quantum_original_data",
-            "--out-dir", "results/quantum",
+            "--quantum_rmsd-root", "data/Quantum_original_data",
+            "--out-dir", "results/quantum_rmsd",
             "--mode", "both"
         ]
     main()

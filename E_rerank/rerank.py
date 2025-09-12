@@ -9,14 +9,14 @@ E_rerank.rerank (final, with SS3/SS8 fusion):
 
 What this module does
 ---------------------
-- Robustly reads quantum candidates & energies (supports "Rank i: <float>" text).
+- Robustly reads quantum_rmsd candidates & energies (supports "Rank i: <float>" text).
 - Reads NetSurfP priors (headerless TSV/CSV, 19-column standard layout).
 - For each candidate (top_1..top_N):
     * Load per-structure angles from angles_<pdbid>.csv if present (degrees).
     * Otherwise, compute "virtual" phi/psi (radians) from C-alpha-only xyz.
     * Derive candidate SS3/SS8 probabilities from angles (Ramachandran kernels).
 - Calls FusionReRanker to combine:
-    * quantum energy (E_q)
+    * quantum_rmsd energy (E_q)
     * secondary-structure distance (D_ss)
     * angle difference (D_{phi,psi}), optionally RSA-weighted
 - Writes:
@@ -109,7 +109,7 @@ class ERerank:
     def run(self, index_file: str) -> None:
         """
         Process all PDBIDs listed in index_file:
-        - filter out those without quantum dir or NSP tsv/csv
+        - filter out those without quantum_rmsd dir or NSP tsv/csv
         - process each valid pdbid
         """
         pdbids = self._read_index_pdbids(index_file)
@@ -123,7 +123,7 @@ class ERerank:
             nsp_csv = os.path.join(self.paths.nsp_root, f"{pid_norm}.csv")
 
             if not os.path.isdir(q_dir):
-                print(f"[WARN] Skip {pid_norm}: quantum dir missing -> {q_dir}")
+                print(f"[WARN] Skip {pid_norm}: quantum_rmsd dir missing -> {q_dir}")
                 continue
             if not (os.path.isfile(nsp_tsv) or os.path.isfile(nsp_csv)):
                 print(f"[WARN] Skip {pid_norm}: NSP file missing -> {nsp_tsv} / {nsp_csv}")
@@ -140,7 +140,7 @@ class ERerank:
     def _process_one(self, pdbid: str) -> None:
         """
         Process a single pdbid:
-        - read quantum candidates and energies
+        - read quantum_rmsd candidates and energies
         - read NSP priors
         - build candidate list (ensure each candidate carries phi/psi and ss_probs_hat)
         - rerank and materialize outputs
@@ -503,7 +503,7 @@ class ERerank:
     def _rerank(self, priors: Dict[str, np.ndarray], cands: List[Candidate]) -> pd.DataFrame:
         """
         Rerank candidates using FusionReRanker which combines:
-        - quantum energy
+        - quantum_rmsd energy
         - secondary structure distance (if candidate supplies ss_probs_hat)
         - angle differences (phi/psi), weighted by RSA if available
         """
