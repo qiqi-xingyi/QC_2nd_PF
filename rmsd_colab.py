@@ -19,14 +19,13 @@ Input:
 
 Output:
   - <out_dir>/colabfold_models.csv   # RMSD per model
-  - <out_dir>/colabfold_best.csv     # best RMSD per target
 """
 
 import os
 import re
 import argparse
 import warnings
-from typing import Dict, Tuple, Optional, List
+from typing import Dict, List
 
 import numpy as np
 import pandas as pd
@@ -71,7 +70,7 @@ def chain_to_seq_ca(chain):
         seq1.append(one)
         xyz.append(res["CA"].coord)
         resnums.append(res.id[1])
-    return "".join(seq1), np.asarray(xyz, float), np.asarray(resnums, int)
+    return np.array(seq1), np.asarray(xyz, float), np.asarray(resnums, int)
 
 # ---------------- info.txt ----------------
 def tri_to_one(seq3: str) -> str:
@@ -103,8 +102,9 @@ def load_info(path: str) -> Dict[str, dict]:
     return info
 
 # ---------------- RMSD utils ----------------
-def align_local_indices(a: str, b: str):
-    alns = pairwise2.align.localms(a, b, 2, -1, -5, -1, one_alignment_only=True)
+def align_local_indices(a: np.ndarray, b: np.ndarray):
+    alns = pairwise2.align.localms("".join(a.tolist()), "".join(b.tolist()),
+                                   2, -1, -5, -1, one_alignment_only=True)
     if not alns:
         return np.array([], int), np.array([], int)
     A, B, *_ = alns[0]
@@ -120,7 +120,7 @@ def align_local_indices(a: str, b: str):
 def kabsch_rmsd(P: np.ndarray, Q: np.ndarray) -> float:
     Pc = P - P.mean(0); Qc = Q - Q.mean(0)
     H = Pc.T @ Qc
-    U, S, Vt = np.linalg.svd(H)
+    U, _, Vt = np.linalg.svd(H)
     R = Vt.T @ U.T
     if np.linalg.det(R) < 0:
         Vt[-1, :] *= -1
@@ -130,7 +130,6 @@ def kabsch_rmsd(P: np.ndarray, Q: np.ndarray) -> float:
 
 # ---------------- main compute ----------------
 def compute_colabfold_rmsd(pdb_id: str, rec: dict, pdbbind_root: str, colabfold_root: str, rows: list):
-    # reference structure
     ref_path = os.path.join(pdbbind_root, pdb_id, f"{pdb_id}_protein.pdb")
     parser = PDBParser(QUIET=True, PERMISSIVE=True)
     struct = parser.get_structure(pdb_id, ref_path)
@@ -140,7 +139,6 @@ def compute_colabfold_rmsd(pdb_id: str, rec: dict, pdbbind_root: str, colabfold_
     mask = (ref_resnums >= rec["start"]) & (ref_resnums <= rec["end"])
     ref_seq_win, ref_xyz_win = ref_seq[mask], ref_xyz[mask]
 
-    # colabfold predicted models
     subdirs = [d for d in os.listdir(colabfold_root) if d.startswith(pdb_id)]
     if not subdirs:
         rows.append(dict(pdb_id=pdb_id, error="no_colabfold_dir"))
@@ -155,11 +153,11 @@ def compute_colabfold_rmsd(pdb_id: str, rec: dict, pdbbind_root: str, colabfold_
         pred_chain = list(model_pred.get_chains())[0]
         pred_seq, pred_xyz, _ = chain_to_seq_ca(pred_chain)
 
-        ip, ir = align_local_indices(pred_seq, ref_seq)
+        ip, ir = align_local_indices(pred_seq, ref_seq_win)
         if len(ip) < 3:
             rows.append(dict(pdb_id=pdb_id, model=nm, n_match=len(ip), error="no_valid_alignment"))
             continue
-        P, Q = pred_xyz[ip], ref_xyz[ir]
+        P, Q = pred_xyz[ip], ref_xyz_win[ir]
         rmsd_val = round(kabsch_rmsd(P, Q), 3)
         rows.append(dict(pdb_id=pdb_id, model=nm, n_match=len(ip), rmsd_A=rmsd_val))
 
