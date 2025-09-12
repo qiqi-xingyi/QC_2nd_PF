@@ -28,7 +28,15 @@ import numpy as np
 import pandas as pd
 from typing import Tuple, Dict
 from Bio.PDB import PDBParser, MMCIFParser, is_aa
-from Bio.PDB.Polypeptide import three_to_one
+try:
+    from Bio.PDB.Polypeptide import three_to_one
+except ImportError:
+    from Bio.Data.IUPACData import protein_letters_3to1 as _3to1_dict
+    def three_to_one(resname: str) -> str:
+        """Map three-letter residue name to one-letter code."""
+        resname = resname.strip().upper()
+        return _3to1_dict.get(resname, "X")
+
 from Bio import pairwise2
 
 AA1 = set(list("ACDEFGHIKLMNPQRSTVWY"))
