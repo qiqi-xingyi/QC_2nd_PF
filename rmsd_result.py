@@ -8,21 +8,6 @@
 Summarize RMSD results into one CSV:
 Output columns: pdbid, af3, colab, quantum, hybrid
 
-Data sources (relative paths):
-1) results/af3_out/af3_rmsd/af3_models.csv
-   - For each pdbid, take the maximum value of rmsd_rigid_A
-
-2) results/colabfold_out/colabfold_rmsd.csv
-   - For each pdbid, take the maximum value of rmsd_A
-
-3) results/quantum_rmsd/quantum_top1.csv
-   - Each pdbid has one row
-   - Take the smaller value of the last 2nd and last 3rd columns
-
-4) results/quantum_rmsd/quantum_top5.csv
-   - Each pdbid has 5 rows
-   - For each row, take the smaller of the last 2nd and last 3rd columns
-   - For the 5 rows, take the minimum of those values
 """
 
 from pathlib import Path
