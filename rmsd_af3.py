@@ -13,9 +13,12 @@ AF3 short-fragment RMSD vs dataset reference window.
 Workflow:
 1) Read info.txt (pdb_id, pocket file, chain, start-end, optional tri-letter seq).
 2) Prefer <id>_protein.pdb as reference (fallback to pocket if missing).
-3) Extract the best reference chain (try requested chain; fallback to the most relevant chain).
-4) For each AF3 model: read predicted chain(s), do local alignment to the full reference chain,
-   then keep only matched positions whose reference residue numbers fall in [start, end].
+3) Extract the best reference chain (try requested chain; fallback to the most relevant chain),
+   using a relaxed rule: any residue that has a CA atom is kept.
+   Normalize common modified/alias residue names (MSE->MET, HSD->HIS, SEP->SER, etc.).
+4) For each AF3 model: read predicted chain(s) with the same relaxed rule, do local alignment
+   to the full reference chain, then keep only matched positions whose reference residue numbers
+   fall in [start, end].
 5) Compute RMSD (rigid; optional similarity RMSD) on those positions.
 
 Outputs:
@@ -35,9 +38,8 @@ import pandas as pd
 from Bio import BiopythonDeprecationWarning
 warnings.filterwarnings("ignore", category=BiopythonDeprecationWarning)
 
-from Bio.PDB import PDBParser, MMCIFParser, is_aa
-
-# three_to_one compatibility across Biopython versions
+from Bio.PDB import PDBParser, MMCIFParser
+# Provide robust three_to_one across Biopython versions
 try:
     from Bio.PDB.Polypeptide import three_to_one
 except Exception:
@@ -48,6 +50,16 @@ except Exception:
 from Bio import pairwise2
 from Bio.Data.IUPACData import protein_letters_3to1 as MAP_3TO1
 
+# Residue name normalization to standard amino acids
+RESNAME_NORMALIZE = {
+    "MSE": "MET", "SEC": "CYS", "PYL": "LYS",
+    "HSD": "HIS", "HSE": "HIS", "HSP": "HIS",
+    "HID": "HIS", "HIE": "HIS", "HIP": "HIS",
+    "SEP": "SER", "TPO": "THR", "PTR": "TYR",
+    "CSO": "CYS", "CME": "CYS", "MLY": "LYS",
+    "GLX": "GLU", "ASX": "ASP",  # ambiguous → pick acidic parent
+    # extend if you meet other modified names carrying a CA
+}
 
 # -------------------- info.txt parsing --------------------
 def tri_to_one(seq3: str) -> str:
@@ -88,7 +100,6 @@ def load_info(path: str) -> Dict[str, dict]:
                 info[rec["pdb_id"]] = rec
     return info
 
-
 # -------------------- reference file selection --------------------
 def find_reference_protein(pdbbind_root: str, pdb_id: str, pocket_name: str) -> str:
     candidates = [
@@ -102,63 +113,74 @@ def find_reference_protein(pdbbind_root: str, pdb_id: str, pocket_name: str) -> 
             return c
     raise FileNotFoundError(f"Reference file not found for {pdb_id} (protein/pocket).")
 
+# -------------------- residue helpers --------------------
+def normalize_resname(resname: str) -> str:
+    rn = resname.strip().upper()
+    return RESNAME_NORMALIZE.get(rn, rn)
+
+def chain_to_seq_ca_relaxed(chain) -> Tuple[str, np.ndarray, np.ndarray]:
+    """
+    Build (seq1, CA_xyz, resnums) from a biopython Chain:
+    - keep any residue that has a CA atom (do not rely on is_aa),
+    - normalize residue names, map to one-letter if possible; keep 'X' otherwise.
+    """
+    seq1, xyz, resnums = [], [], []
+    for res in chain:
+        if "CA" not in res:
+            continue
+        rn = normalize_resname(res.get_resname())
+        try:
+            one = three_to_one(rn)
+        except Exception:
+            one = "X"
+        seq1.append(one)
+        xyz.append(res["CA"].coord)
+        resnums.append(res.id[1])  # resseq (ignore insertion code)
+    return "".join(seq1), np.asarray(xyz, float), np.asarray(resnums, int)
 
 # -------------------- reference chain extraction --------------------
-def extract_best_reference_chain(ref_path: str, requested_chain: str, info_seq1: Optional[str] = None):
+def extract_best_reference_chain(ref_path: str, requested_chain: str, info_seq1: Optional[str] = None,
+                                 debug: bool = False):
     """
     Return (seq1_full, CA_xyz_full, resnums_full, chain_id_selected).
     Strategy:
     - Try the requested chain first.
-    - If it fails (no CA), scan all chains and pick the one with best local alignment
-      score to info_seq1 (if provided) + tie-break by #CAs.
-    - Use is_aa(..., standard=False) to keep modified residues (MSE, etc.).
+    - If it fails (no CA after relaxed parsing), scan all chains and pick the one
+      with best local alignment score to info_seq1 (if provided), tie-break by #CAs.
     """
     parser = MMCIFParser(QUIET=True) if ref_path.lower().endswith((".cif", ".mmcif")) \
         else PDBParser(QUIET=True, PERMISSIVE=True)
     struct = parser.get_structure(os.path.basename(ref_path), ref_path)
     model = list(struct.get_models())[0]
 
-    def chain_to_seq_ca(chain):
-        seq1, xyz, resnums = [], [], []
-        for res in chain:
-            if not is_aa(res, standard=False):
-                continue
-            if "CA" not in res:
-                continue
-            try:
-                one = three_to_one(res.get_resname())
-            except KeyError:
-                one = "X"
-            if one == "X":
-                continue
-            seq1.append(one)
-            xyz.append(res["CA"].coord)
-            resnums.append(res.id[1])  # residue number (resseq)
-        return "".join(seq1), np.asarray(xyz, float), np.asarray(resnums, int)
+    candidates = []
 
-    # Try requested chain
+    # try requested chain
     preferred = None
     for ch in model.get_chains():
         if ch.id.strip() == requested_chain.strip():
             preferred = ch
             break
-
-    candidates = []
     if preferred is not None:
-        s, x, r = chain_to_seq_ca(preferred)
+        s, x, r = chain_to_seq_ca_relaxed(preferred)
         if len(s) >= 1:
             candidates.append(("preferred", preferred.id, s, x, r))
 
-    # Scan all chains as fallback
+    # scan all chains
     for ch in model.get_chains():
-        s, x, r = chain_to_seq_ca(ch)
+        s, x, r = chain_to_seq_ca_relaxed(ch)
         if len(s) >= 1:
             candidates.append(("scan", ch.id, s, x, r))
+
+    if debug:
+        print(f"[DEBUG] Reference {os.path.basename(ref_path)} candidates:")
+        for tag, cid, s, x, r in candidates[:10]:
+            print(f"  - chain {cid:>2} ({tag}), CA={len(s)} seqlen, seq_head={s[:50]}")
 
     if not candidates:
         raise ValueError(f"No protein CA found in reference: {ref_path}")
 
-    # Score: local alignment score vs info_seq1 (if available), tie-break by length
+    # score by local alignment vs info_seq1 (if provided), tie-break by length
     best = None
     best_score = -1e9
     for tag, cid, s, x, r in candidates:
@@ -173,8 +195,9 @@ def extract_best_reference_chain(ref_path: str, requested_chain: str, info_seq1:
             best = (cid, s, x, r)
 
     sel_chain, sel_seq, sel_xyz, sel_resnums = best
+    if debug:
+        print(f"[DEBUG] Selected reference chain: {sel_chain}, CA={len(sel_seq)}")
     return sel_seq, sel_xyz, sel_resnums, sel_chain
-
 
 # -------------------- AF3 model reading --------------------
 def list_af3_models(folder: str, pdb_id: str) -> Dict[str, str]:
@@ -194,7 +217,7 @@ def list_af3_models(folder: str, pdb_id: str) -> Dict[str, str]:
                 out[f"model_{m.group(1)}"] = os.path.join(folder, nm)
     return out
 
-def read_predicted_chains(pred_path: str) -> List[Tuple[str, str, np.ndarray]]:
+def read_predicted_chains_relaxed(pred_path: str, debug: bool = False) -> List[Tuple[str, str, np.ndarray]]:
     parser = MMCIFParser(QUIET=True) if pred_path.lower().endswith((".cif", ".mmcif")) \
         else PDBParser(QUIET=True, PERMISSIVE=True)
     struct = parser.get_structure(os.path.basename(pred_path), pred_path)
@@ -203,22 +226,22 @@ def read_predicted_chains(pred_path: str) -> List[Tuple[str, str, np.ndarray]]:
     for ch in model.get_chains():
         seq1, xyz = [], []
         for res in ch:
-            if not is_aa(res, standard=False):
-                continue
             if "CA" not in res:
                 continue
+            rn = normalize_resname(res.get_resname())
             try:
-                one = three_to_one(res.get_resname())
-            except KeyError:
+                one = three_to_one(rn)
+            except Exception:
                 one = "X"
-            if one == "X":
-                continue
             seq1.append(one)
             xyz.append(res["CA"].coord)
         if seq1 and xyz:
             results.append((ch.id, "".join(seq1), np.asarray(xyz, float)))
+    if debug:
+        print(f"[DEBUG] Pred {os.path.basename(pred_path)} chains:")
+        for cid, s, x in results:
+            print(f"  - chain {cid:>2}, CA={len(s)} seqlen, seq_head={s[:50]}")
     return results
-
 
 # -------------------- alignment & RMSD --------------------
 def align_local_indices(a: str, b: str):
@@ -258,12 +281,11 @@ def similarity_rmsd(P: np.ndarray, Q: np.ndarray):
     Pr = s * (Pc @ R)
     return float(np.sqrt(((Pr - Qc) ** 2).sum(1).mean())), float(s)
 
-
 # -------------------- per-target compute --------------------
 def compute_one(pdb_id: str, rec: dict, args, rows_models: list, rows_best: list):
     ref_path = find_reference_protein(args.pdbbind_root, pdb_id, rec["pocket"])
     ref_seq_full, ref_xyz_full, ref_resnums, ref_chain_id = extract_best_reference_chain(
-        ref_path, rec["chain"], rec.get("seq1", "")
+        ref_path, rec["chain"], rec.get("seq1", ""), debug=args.debug
     )
 
     af3_dir = os.path.join(args.af3_root, pdb_id)
@@ -276,14 +298,13 @@ def compute_one(pdb_id: str, rec: dict, args, rows_models: list, rows_best: list
     metric_name = "rmsd_rigid_A" if args.mode in ("rigid", "both") else "rmsd_scale_A"
 
     for tag, fpath in sorted(models.items(), key=lambda kv: int(kv[0].split("_")[-1])):
-        preds = read_predicted_chains(fpath)
+        preds = read_predicted_chains_relaxed(fpath, debug=args.debug)
         if not preds:
             rows_models.append(dict(pdb_id=pdb_id, model=tag, file=os.path.basename(fpath),
                                     ref_chain=ref_chain_id, n_ref_window=rec["end"] - rec["start"] + 1,
                                     n_match=0, error="no_pred_chain"))
             continue
 
-        # choose predicted chain that yields max overlap inside [start, end] window
         chosen = None
         chosen_overlap = -1
         chosen_ip = chosen_ir = None
@@ -329,7 +350,6 @@ def compute_one(pdb_id: str, rec: dict, args, rows_models: list, rows_best: list
 
     rows_best.append(dict(pdb_id=pdb_id, **(best_row if best_row else {"error": "no_valid_model"})))
 
-
 # -------------------- CLI --------------------
 def main():
     ap = argparse.ArgumentParser(description="AF3 short-fragment RMSD vs dataset window")
@@ -338,6 +358,7 @@ def main():
     ap.add_argument("--af3-root", required=True)
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--mode", choices=["rigid", "scale", "both"], default="rigid")
+    ap.add_argument("--debug", action="store_true", help="Print chain summaries and alignment heads")
     args = ap.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -373,8 +394,10 @@ if __name__ == "__main__":
             "--af3-root", "results/af3_out/af3_result",
             "--out-dir", "results/af3_rmsd",
             "--mode", "rigid",
+            "--debug",
         ]
     main()
+
 
 
 
