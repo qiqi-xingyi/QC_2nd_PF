@@ -4,7 +4,6 @@
 # @Email : yzhan135@kent.edu
 # @File:summary_rmsd.py
 
-
 """
 RMSD visualization with consistent colors and full heatmap labels.
 
