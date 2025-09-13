@@ -4,8 +4,6 @@
 # @Email : yzhan135@kent.edu
 # @File:summary_rmsd.py
 
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 """
 RMSD visualization with consistent colors and full heatmap labels.
