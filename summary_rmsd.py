@@ -120,7 +120,6 @@ def figure_violin_jitter(df: pd.DataFrame):
     savefig("fig1_violin_jitter")
     plt.close()
 
-
 def figure_ecdf(df: pd.DataFrame):
     plt.figure(figsize=(6.8, 4.0))
     for m in METHODS:
