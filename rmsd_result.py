@@ -9,7 +9,6 @@ Summarize RMSD results into one CSV:
 Output columns: pdbid, af3, colab, quantum, hybrid
 
 """
-
 from pathlib import Path
 import pandas as pd
 
