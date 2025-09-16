@@ -86,12 +86,12 @@ class FusionReRanker:
 
     # ------------------- scoring -------------------
     def _angle_diff(self, x: np.ndarray, y: np.ndarray) -> float:
-        """环形差值 (弧度)，返回均方差."""
+        """Circular difference (in radians), returns mean squared difference."""
         diff = np.angle(np.exp(1j * (x - y)))
         return float(np.mean(diff**2))
 
     def _ss_distance(self, p: np.ndarray, q: np.ndarray) -> float:
-        """二级结构分布差异."""
+        """Secondary structure distribution difference."""
         eps = 1e-9
         if self.dist == "l2":
             return float(np.linalg.norm(p - q))
@@ -116,19 +116,21 @@ class FusionReRanker:
             D_ss = np.nan
             D_phi_psi = np.nan
 
-            # ---------- D_ss（二级结构分布差异），若候选提供了 ss_probs_hat 才计算 ----------
+            # ---------- D_ss (secondary structure distribution difference),
+            # only computed if the candidate provides ss_probs_hat ----------
             if c.ss_probs_hat is not None:
                 m = min(len(self.ss_probs), len(c.ss_probs_hat))
                 if m > 0:
                     P = self.ss_probs[:m]
                     Q = c.ss_probs_hat[:m]
-                    # 只在行向量都有限的残基上计算
+                    # Only compute on residues where both rows are finite
                     row_mask = np.isfinite(P).all(axis=1) & np.isfinite(Q).all(axis=1)
                     if np.any(row_mask):
                         idxs = np.where(row_mask)[0]
                         D_ss = float(np.mean([self._ss_distance(P[i], Q[i]) for i in idxs]))
 
-            # ---------- D_{φψ}（角度差），对 NaN 做掩码，只在有效位点上加权 ----------
+            # ---------- D_{φψ} (angle difference),
+            # mask NaN values and compute only on valid positions ----------
             if (c.phi_hat is not None and len(c.phi_hat) > 0 and
                     c.psi_hat is not None and len(c.psi_hat) > 0):
                 n = min(len(self.phi), len(c.phi_hat), len(self.psi), len(c.psi_hat))
@@ -141,17 +143,17 @@ class FusionReRanker:
                     mask = (np.isfinite(phi_p) & np.isfinite(psi_p) &
                             np.isfinite(phi_c) & np.isfinite(psi_c))
                     if np.any(mask):
-                        # 角度环形差：angle(exp(iΔ)) ∈ [-π, π]
+                        # Circular angle difference: angle(exp(iΔ)) ∈ [-π, π]
                         dphi = np.angle(np.exp(1j * (phi_p[mask] - phi_c[mask]))) ** 2
                         dpsi = np.angle(np.exp(1j * (psi_p[mask] - psi_c[mask]))) ** 2
-                        diff = dphi + dpsi  # 每个有效残基的误差
+                        diff = dphi + dpsi  # error per valid residue
 
                         if self.angle_weight == "rsa" and self.rsa is not None:
                             w = np.clip(self.rsa[:n][mask], 0.0, 1.0)
                         else:
                             w = np.ones(diff.shape, dtype=float)
 
-                        # 避免全 0 权重
+                        # Avoid all-zero weights
                         if np.sum(w) <= 1e-12:
                             w = np.ones_like(w, dtype=float)
 
@@ -166,7 +168,7 @@ class FusionReRanker:
 
         df = pd.DataFrame(rows)
 
-        # ---------- 列内归一化（忽略 NaN） ----------
+        # Normalize terms if required
         if self.normalize_terms:
             for col in ["E_q", "D_ss", "D_phi_psi"]:
                 if col in df.columns:
@@ -190,4 +192,3 @@ class FusionReRanker:
         )
 
         return df.sort_values("Score").reset_index(drop=True)
-
