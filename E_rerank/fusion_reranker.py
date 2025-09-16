@@ -181,7 +181,7 @@ class FusionReRanker:
                             v_norm = np.zeros_like(v)
                         df[col] = v_norm
                     else:
-                        df[col] = v  # 全 NaN 列保持不变
+                        df[col] = v
 
         df["Score"] = (
                 self.alpha * df["E_q"].fillna(0.0) +
