@@ -12,6 +12,7 @@ Output columns: pdbid, af3, colab, quantum, hybrid
 from pathlib import Path
 import pandas as pd
 
+
 AF3_FILE = Path("results/af3_out/af3_rmsd/af3_models.csv")
 COLAB_FILE = Path("results/colabfold_out/colabfold_rmsd.csv")
 Q_TOP1_FILE = Path("results/quantum_rmsd/quantum_top1.csv")
