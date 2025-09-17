@@ -40,7 +40,7 @@ except Exception:
 # =========================
 class CONFIG:
     # 项目根目录（包含 results/hybrid_out 和 results/quantum_rmsd）
-    project_root: str = r"/path/to/QC_2nd_Protein_folding"  # ←← 在 IDE 里把这行改成你的项目路径
+    project_root: str = r"/Users/yuqizhang/Desktop/Code/QC_2nd_Protein_folding"  # ←← 在 IDE 里把这行改成你的项目路径
     # 输出目录（相对 project_root 或绝对路径均可）
     out_dir: str = "results/rmsd_figures"
     # 汇总 CSV 文件名
