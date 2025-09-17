@@ -41,17 +41,17 @@ except Exception:
 # ========= CONFIG ========
 # =========================
 class CONFIG:
-    # 设置你的工程根目录（包含 results/hybrid_out 和 results/quantum_rmsd）
-    project_root: str = r"/Users/yuqizhang/Desktop/Code/QC_2nd_Protein_folding"  # ←← 改成你的路径
-    # 输出目录（相对 project_root 或绝对路径都可以）
+    # Set your project root (must contain results/hybrid_out and results/quantum_rmsd)
+    project_root: str = r"/Users/yuqizhang/Desktop/Code/QC_2nd_Protein_folding"  # <-- change to your path
+    # Output directory (can be absolute or relative to project_root)
     out_dir: str = "results/rmsd_figures"
-    # 文件名
+    # Filenames
     summary_all_name: str = "summary_all_candidates.csv"
     summary_best_name: str = "summary_best_per_pdb.csv"
-    # 相对路径
+    # Relative paths
     hybrid_out_rel: str = os.path.join("results", "hybrid_out")
     rmsd_csv_rel: str = os.path.join("results", "quantum_rmsd", "quantum_top5.csv")
-    # 只取 top_k（默认 5）；如果需要改更大/更小可在此设置
+    # Use only top_k (default 5); change here if you need a different K
     top_k: int = 5
 
 
@@ -88,7 +88,7 @@ def read_all_from_rerank(hybrid_out_dir: str, top_k: int) -> pd.DataFrame:
             print(f"[WARN] {fcsv} missing columns {needed}, found {set(df.columns)}")
             continue
 
-        # 仅保留 top_1..top_k（如果 rerank.csv 含更多条目，避免混入其它 tag）
+        # Keep only top_1..top_k (if rerank.csv contains more entries, avoid mixing other tags)
         if "cid" in df.columns:
             df = df[df["cid"].astype(str).isin(valid_tags)].copy()
 
@@ -96,7 +96,7 @@ def read_all_from_rerank(hybrid_out_dir: str, top_k: int) -> pd.DataFrame:
             print(f"[WARN] No cid in {valid_tags} for {pdb_id}")
             continue
 
-        # 选取需要的列；缺失的能量分量用 NaN 占位
+        # Select necessary columns; fill missing energy components with NaN
         cols = ["cid", "Score"]
         for extra in ["E_q", "D_ss", "D_phi_psi"]:
             if extra in df.columns:
@@ -104,7 +104,7 @@ def read_all_from_rerank(hybrid_out_dir: str, top_k: int) -> pd.DataFrame:
 
         df2 = df[cols].copy()
         df2.insert(0, "pdb_id", pdb_id)
-        # 统一列名（若缺某列则补）
+        # Normalize column set (add missing ones if absent)
         for extra in ["E_q", "D_ss", "D_phi_psi"]:
             if extra not in df2.columns:
                 df2[extra] = np.nan
@@ -114,7 +114,7 @@ def read_all_from_rerank(hybrid_out_dir: str, top_k: int) -> pd.DataFrame:
     if not rows:
         raise RuntimeError("No valid rerank rows parsed.")
     out = pd.concat(rows, axis=0, ignore_index=True)
-    # 排序（便于检查）
+    # Sort for easier inspection
     out = out.sort_values(["pdb_id", "cid"]).reset_index(drop=True)
     return out
 
@@ -200,7 +200,7 @@ def plot_corr(df: pd.DataFrame, x_col: str, y_col: str, out_png: str, out_pdf: s
     )
 
     plt.figure(figsize=(6, 5))
-    # 注意：不指定颜色与样式，以便通用
+    # Note: do not set explicit colors/styles to keep it generic
     plt.scatter(xm, ym, s=28, alpha=0.85)
     if fit_x is not None:
         plt.plot(fit_x, fit_y, linewidth=2.0)
@@ -235,26 +235,26 @@ def run(project_root: str, out_dir: str,
     out_dir = out_dir if os.path.isabs(out_dir) else os.path.join(project_root, out_dir)
     out_dir = ensure_dir(out_dir)
 
-    # 1) 读取所有候选 (top_k) 的重排分数
+    # 1) Read all rerank scores for candidates (top_k)
     all_df = read_all_from_rerank(hybrid_out_dir, top_k=top_k)
     print(f"[INFO] Loaded rerank rows: {all_df.shape[0]}")
 
-    # 2) 读取 RMSD 并合并
+    # 2) Load RMSD table and merge
     rmsd_df = load_rmsd_table(rmsd_csv)
     merged_all = merge_all_with_rmsd(all_df, rmsd_df)
 
-    # 3) 保存 375 点的完整汇总
+    # 3) Save full summary for ~375 points
     summary_all_csv = os.path.join(out_dir, summary_all_name)
     merged_all.to_csv(summary_all_csv, index=False)
     print(f"[OK] Saved full summary: {summary_all_csv}")
 
-    # 4) 生成每个 PDB 的最优（便于主文摘要表）
+    # 4) Build per-PDB best (useful for the main summary table)
     best_df = best_per_pdb_from_all(merged_all)
     summary_best_csv = os.path.join(out_dir, summary_best_name)
     best_df.to_csv(summary_best_csv, index=False)
     print(f"[OK] Saved per-PDB best: {summary_best_csv}")
 
-    # 5) 相关性图（对 ALL candidates 作图，才能看出打分函数区分能力）
+    # 5) Correlation plots (use ALL candidates to assess discriminative power of the scoring function)
     plot_corr(merged_all, "Score", "rmsd_rigid_A",
               os.path.join(out_dir, "efuse_vs_rmsd_rigid_all.png"),
               os.path.join(out_dir, "efuse_vs_rmsd_rigid_all.pdf"),
