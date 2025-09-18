@@ -59,8 +59,8 @@ if __name__ == '__main__':
     ax1.legend(handles=[Patch(facecolor=plt.get_cmap("Blues")(0.7), edgecolor='none', label="Quantum landscape")],
                loc="upper left", frameon=False)
     plt.tight_layout()
-    plt.savefig("/mnt/data/energy_landscape_quantum_multi.pdf", bbox_inches="tight")
-    plt.savefig("/mnt/data/energy_landscape_quantum_multi.svg", bbox_inches="tight")
+    plt.savefig("./mnt/energy_landscape_quantum_multi.pdf", bbox_inches="tight")
+    plt.savefig("./mnt/energy_landscape_quantum_multi.svg", bbox_inches="tight")
     plt.show()
 
     # Figure 2: DL landscape (local patches near quantum basins)
@@ -72,8 +72,8 @@ if __name__ == '__main__':
     ax2.legend(handles=[Patch(facecolor=plt.get_cmap("Reds")(0.7), edgecolor='none', label="DL statistical potentials (local)")],
                loc="upper left", frameon=False)
     plt.tight_layout()
-    plt.savefig("/mnt/data/energy_landscape_dl_patches.pdf", bbox_inches="tight")
-    plt.savefig("/mnt/data/energy_landscape_dl_patches.svg", bbox_inches="tight")
+    plt.savefig("./mnt/energy_landscape_dl_patches.pdf", bbox_inches="tight")
+    plt.savefig("./mnt/energy_landscape_dl_patches.svg", bbox_inches="tight")
     plt.show()
 
     # Figure 3: Fused landscape (DL-detailed valleys; Quantum elsewhere)
@@ -100,6 +100,6 @@ if __name__ == '__main__':
         Patch(facecolor=cmp_q(0.70), edgecolor='none', label="Quantum elsewhere"),
     ], loc="upper left", frameon=False)
     plt.tight_layout()
-    plt.savefig("/mnt/data/energy_landscape_fused_valleyMasked.pdf", bbox_inches="tight")
-    plt.savefig("/mnt/data/energy_landscape_fused_valleyMasked.svg", bbox_inches="tight")
+    plt.savefig("./mnt/energy_landscape_fused_valleyMasked.pdf", bbox_inches="tight")
+    plt.savefig("./mnt/energy_landscape_fused_valleyMasked.svg", bbox_inches="tight")
     plt.show()
