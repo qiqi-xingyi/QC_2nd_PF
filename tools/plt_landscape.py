@@ -36,12 +36,20 @@ def dl_landscape_patches(X, Y, centers):
     return Z, P
 
 def clean_axes(ax):
-    ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
-    ax.set_xlabel(""); ax.set_ylabel(""); ax.set_zlabel("")
-    ax.grid(False)
-    ax.xaxis.pane.set_visible(False)
-    ax.yaxis.pane.set_visible(False)
-    ax.zaxis.pane.set_visible(False)
+    # keep ticks but hide tick labels
+    ax.set_xticklabels([])
+    ax.set_yticklabels([])
+    ax.set_zticklabels([])
+    # hide axis labels
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+    ax.set_zlabel("")
+    # keep grid and panes visible
+    ax.grid(True)
+    ax.xaxis.pane.set_visible(True)
+    ax.yaxis.pane.set_visible(True)
+    ax.zaxis.pane.set_visible(True)
+
 
 if __name__ == '__main__':
 
