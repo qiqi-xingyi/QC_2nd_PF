@@ -6,7 +6,7 @@ Make a polished ALL-only scatter + linear regression plot for Score vs rmsd
 with vivid colors and refined styling.
 
 Input:
-  results/rmsd_figures/summary_all_candidates_aligned.csv
+  results/rmsd_figures/summary_all_candidates.csv
 
 Outputs:
   results/rmsd_figures/corr_plots/ALL_score_rmsd.png
@@ -191,7 +191,7 @@ def main():
     parser.add_argument(
         "--input",
         type=str,
-        default="results/rmsd_figures/summary_all_candidates_aligned.csv",
+        default="results/rmsd_figures/summary_all_candidates.csv",
         help="Path to the aligned CSV."
     )
     parser.add_argument(
