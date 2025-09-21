@@ -46,26 +46,26 @@ if __name__ == '__main__':
         depth = qrow["depth"]
 
 
-    energy_col = energy_cols[cid]
-    energy_val = qrow[energy_col]
+        energy_col = energy_cols[cid]
+        energy_val = qrow[energy_col]
 
-    if pd.notna(energy_val):
-        energy_val = round(float(energy_val), 2)
+        if pd.notna(energy_val):
+            energy_val = round(float(energy_val), 2)
 
-    records.append({
-        "pdbid": pdbid,
-        "sequence": sequence,
-        "length": length,
-        "qubits": qubits,
-        "depth": depth,
-        "cid": cid,
-        "energy": energy_val,
-        "Score": score,
-        "rmsd": rmsd,
-    })
+        records.append({
+            "pdbid": pdbid,
+            "sequence": sequence,
+            "length": length,
+            "qubits": qubits,
+            "depth": depth,
+            "cid": cid,
+            "energy": energy_val,
+            "Score": score,
+            "rmsd": rmsd,
+        })
 
 
-df_out = pd.DataFrame(records)
-df_out.to_csv(output_file, index=False)
+    df_out = pd.DataFrame(records)
+    df_out.to_csv(output_file, index=False)
 
-print(f"[OK] Wrote merged summary to: {output_file}")
+    print(f"[OK] Wrote merged summary to: {output_file}")
