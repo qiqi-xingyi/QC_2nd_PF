@@ -192,6 +192,5 @@ def main():
     print(f"[OK] Wrote integer-energy CSV to: {args.out_csv}")
 
 
-
 if __name__ == "__main__":
     main()
