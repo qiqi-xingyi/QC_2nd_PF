@@ -4,10 +4,6 @@
 # @Email : yzhan135@kent.edu
 # @File:get_tex_table.py
 
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-
 import argparse
 import os
 import sys
